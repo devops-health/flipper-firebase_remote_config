@@ -1,0 +1,128 @@
+require 'json'
+require 'net/http'
+require 'uri'
+require 'googleauth'
+
+module Flipper
+  module Adapters
+    class FirebaseRemoteConfig
+      class Error < StandardError; end
+      class ETagMismatch < Error; end
+
+      SCOPE        = 'https://www.googleapis.com/auth/firebase.remoteconfig'.freeze
+      API_HOST     = 'firebaseremoteconfig.googleapis.com'.freeze
+      OPEN_TIMEOUT = 5
+      READ_TIMEOUT = 15
+
+      # Thin REST wrapper around the Firebase Remote Config v1 API.
+      #
+      # Why hand-rolled instead of a generated client: there is no published
+      # service gem for `firebaseremoteconfig_v1` — neither bundled inside the
+      # (deprecated) `google-api-client` umbrella, nor as a stand-alone
+      # `google-apis-firebaseremoteconfig_v1`. We still lean on `googleauth`
+      # (which `google-api-client` pulls in transitively) to do the OAuth2
+      # service-account dance, and use Net::HTTP for the two endpoints we
+      # actually need.
+      class Client
+        attr_reader :project_id
+
+        def initialize(project_id:, credentials: nil, http: nil)
+          @project_id  = project_id
+          @credentials = build_credentials(credentials)
+          @http        = http # injection seam for tests
+        end
+
+        # Returns [template_hash, etag_string]. The template is the parsed JSON
+        # body as a Hash; etag is the opaque string from the ETag response
+        # header, which the server demands back on the next write.
+        def fetch_template
+          response = request(:get, template_path)
+          ensure_success!(response)
+          [JSON.parse(response.body), response['ETag']]
+        end
+
+        # Publishes a modified template. Raises ETagMismatch on 409/412 so the
+        # adapter can reload and retry; raises Error on any other failure.
+        def publish_template(template, etag)
+          response = request(
+            :put,
+            template_path,
+            body:    JSON.generate(template),
+            headers: { 'Content-Type' => 'application/json; UTF-8',
+                       'If-Match' => etag || '*' },
+          )
+          raise ETagMismatch, response.body if etag_conflict?(response)
+
+          ensure_success!(response)
+          response
+        end
+
+        private
+
+        def template_path
+          "/v1/projects/#{@project_id}/remoteConfig"
+        end
+
+        def request(method, path, body: nil, headers: {})
+          uri = URI("https://#{API_HOST}#{path}")
+          req_class = method == :get ? Net::HTTP::Get : Net::HTTP::Put
+          req = req_class.new(uri)
+          headers.each { |k, v| req[k] = v }
+          @credentials&.apply!(req.to_hash.merge('Authorization' => nil))
+          token = fetch_access_token
+          req['Authorization'] = "Bearer #{token}" if token
+          req.body = body if body
+
+          http_for(uri).request(req)
+        end
+
+        def http_for(uri)
+          return @http if @http
+
+          http = Net::HTTP.new(uri.host, uri.port)
+          http.use_ssl     = true
+          http.open_timeout = OPEN_TIMEOUT
+          http.read_timeout = READ_TIMEOUT
+          http
+        end
+
+        def fetch_access_token
+          return nil unless @credentials
+
+          @credentials.fetch_access_token! unless @credentials.access_token
+          @credentials.access_token
+        end
+
+        def build_credentials(credentials)
+          case credentials
+          when String
+            ::Google::Auth::ServiceAccountCredentials.make_creds(
+              json_key_io: File.open(credentials),
+              scope:       SCOPE,
+            )
+          when IO, StringIO
+            ::Google::Auth::ServiceAccountCredentials.make_creds(
+              json_key_io: credentials,
+              scope:       SCOPE,
+            )
+          when nil
+            ::Google::Auth.get_application_default([SCOPE])
+          else
+            credentials
+          end
+        end
+
+        def etag_conflict?(response)
+          [409, 412].include?(response.code.to_i)
+        end
+
+        def ensure_success!(response)
+          return if (200..299).cover?(response.code.to_i)
+
+          raise Error,
+                "Firebase Remote Config API error #{response.code}: #{response.body}"
+        end
+      end
+    end
+  end
+end

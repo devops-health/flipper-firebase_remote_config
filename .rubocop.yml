@@ -1,0 +1,28 @@
+AllCops:
+  TargetRubyVersion: 3.0
+  NewCops: enable
+  Exclude:
+    - 'bin/**/*'
+    - 'pkg/**/*'
+    - 'vendor/**/*'
+
+Layout/LineLength:
+  Max: 100
+
+Metrics/MethodLength:
+  Max: 25
+
+Metrics/AbcSize:
+  Max: 25
+
+Metrics/ClassLength:
+  Max: 250
+
+Style/Documentation:
+  Enabled: false
+
+Style/HashSyntax:
+  EnforcedShorthandSyntax: never
+
+Style/FrozenStringLiteralComment:
+  Enabled: false

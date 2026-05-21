@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/opt/homebrew/opt/ruby@3.4/bin/bundle install*)",
+      "Bash(/opt/homebrew/opt/ruby@3.4/bin/bundle exec rspec*)",
+      "Bash(/opt/homebrew/opt/ruby@3.4/bin/bundle exec rubocop*)",
+      "Bash(/opt/homebrew/opt/ruby@3.4/bin/bundle exec rake*)",
+      "Bash(/opt/homebrew/opt/ruby@3.4/bin/bundle info*)",
+      "Bash(/opt/homebrew/opt/ruby@3.4/bin/gem list*)",
+      "Bash(/opt/homebrew/opt/ruby@3.4/bin/gem search*)",
+      "Bash(ls:*)",
+      "Bash(find . *)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(cat:*)"
+    ]
+  }
+}
