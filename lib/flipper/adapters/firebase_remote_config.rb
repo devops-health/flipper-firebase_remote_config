@@ -76,15 +76,15 @@ module Flipper
 
       def get_multi(features)
         template = load_template
-        features.each_with_object({}) do |feature, acc|
-          acc[feature.key] = read_gates(template, feature.key)
+        features.to_h do |feature|
+          [feature.key, read_gates(template, feature.key)]
         end
       end
 
       def get_all
         template = load_template
-        index_from(template).each_with_object({}) do |feature_key, acc|
-          acc[feature_key] = read_gates(template, feature_key)
+        index_from(template).to_h do |feature_key|
+          [feature_key, read_gates(template, feature_key)]
         end
       end
 
@@ -142,18 +142,16 @@ module Flipper
 
       def default_config
         {
-          boolean:              nil,
-          actors:               Set.new,
-          groups:               Set.new,
+          boolean: nil,
+          actors: Set.new,
+          groups: Set.new,
           percentage_of_actors: nil,
-          percentage_of_time:   nil,
+          percentage_of_time: nil
         }
       end
 
       def load_template
-        if @cache && @cached_at && (Time.now - @cached_at) < @cache_ttl
-          return @cache[:template]
-        end
+        return @cache[:template] if @cache && @cached_at && (Time.now - @cached_at) < @cache_ttl
 
         template, etag = @client.fetch_template
         @cache     = { template: template, etag: etag }
@@ -231,14 +229,14 @@ module Flipper
 
       def parameter_value(template, name)
         param = (template['parameters'] || {})[name]
-        param && param.dig('defaultValue', 'value')
+        param&.dig('defaultValue', 'value')
       end
 
       def write_parameter(template, name, json_value)
         template['parameters'] ||= {}
         template['parameters'][name] = {
-          'valueType'    => 'JSON',
-          'defaultValue' => { 'value' => json_value },
+          'valueType' => 'JSON',
+          'defaultValue' => { 'value' => json_value }
         }
       end
 
@@ -250,11 +248,11 @@ module Flipper
 
       def deserialize_gates(raw)
         default_config.merge(
-          boolean:              raw[:boolean],
-          actors:               Set.new(Array(raw[:actors])),
-          groups:               Set.new(Array(raw[:groups])),
+          boolean: raw[:boolean],
+          actors: Set.new(Array(raw[:actors])),
+          groups: Set.new(Array(raw[:groups])),
           percentage_of_actors: raw[:percentage_of_actors],
-          percentage_of_time:   raw[:percentage_of_time],
+          percentage_of_time: raw[:percentage_of_time]
         )
       end
     end
