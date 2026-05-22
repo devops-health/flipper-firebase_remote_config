@@ -3,7 +3,8 @@ require_relative 'lib/flipper/adapters/firebase_remote_config/version'
 Gem::Specification.new do |spec|
   spec.name        = 'flipper-firebase_remote_config'
   spec.version     = Flipper::Adapters::FirebaseRemoteConfig::VERSION
-  spec.authors     = ['DevOps Health']
+  spec.authors     = ["Roberto Quintanilla"]
+  spec.email       = ["roberto.quintanilla@gmail.com"]
   spec.summary     = 'Flipper adapter backed by Firebase Remote Config.'
   spec.description = 'Stores Flipper features as Firebase Remote Config parameters, ' \
                      'reading and writing via the Firebase Remote Config REST API.'
