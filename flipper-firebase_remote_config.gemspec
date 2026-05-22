@@ -12,14 +12,14 @@ Gem::Specification.new do |spec|
   spec.homepage    = 'https://github.com/devops-health/flipper-firebase_remote_config'
   spec.required_ruby_version = '>= 2.7'
 
-  spec.files = Dir['lib/**/*.rb', 'README.md', 'LICENSE', 'CHANGELOG.md']
+  spec.files = Dir['lib/**/*.rb', 'README.md', 'LICENSE']
   spec.require_paths = ['lib']
 
   spec.add_dependency 'flipper', '>= 1.0', '< 2.0'
   spec.add_dependency 'googleauth', '>= 1.0'
 
   spec.metadata['source_code_uri']       = 'https://github.com/devops-health/flipper-firebase_remote_config'
-  spec.metadata['changelog_uri']         = 'https://github.com/devops-health/flipper-firebase_remote_config/blob/main/CHANGELOG.md'
+  spec.metadata['changelog_uri']         = 'https://github.com/devops-health/flipper-firebase_remote_config/releases'
   spec.metadata['bug_tracker_uri']       = 'https://github.com/devops-health/flipper-firebase_remote_config/issues'
   spec.metadata['documentation_uri']     = 'https://github.com/devops-health/flipper-firebase_remote_config#readme'
   spec.metadata['rubygems_mfa_required'] = 'true'

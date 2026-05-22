@@ -9,6 +9,5 @@
 - [ ] Tests added or updated (or N/A — explain why)
 - [ ] `bundle exec rspec` passes locally
 - [ ] `bundle exec rubocop` passes locally
-- [ ] CHANGELOG entry added under `## [Unreleased]`
 - [ ] README updated if public API or configuration changed
 - [ ] PR is focused on a single change

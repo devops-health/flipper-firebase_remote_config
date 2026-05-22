@@ -168,10 +168,11 @@ environment `rubygems`. Without that, `release-gem` will fail to authenticate.
 To cut a release:
 
 1. Bump `VERSION` in `lib/flipper/adapters/firebase_remote_config/version.rb`.
-2. Update `CHANGELOG.md`.
-3. Merge to `main`.
-4. Create a GitHub release with tag `v<version>` (e.g. `v0.2.0`). The
-   workflow publishes automatically.
+2. Merge to `main`.
+3. Create a GitHub release with tag `v<version>` (e.g. `v0.2.0`). Use the
+   release notes as the user-facing changelog — `changelog_uri` in the
+   gemspec points at <https://github.com/devops-health/flipper-firebase_remote_config/releases>.
+   The workflow publishes automatically.
 
 ## Files at a glance
 
@@ -190,7 +191,6 @@ flipper-firebase_remote_config/
 │   ├── support/fake_client.rb                 # in-memory client double
 │   └── spec_helper.rb
 ├── .claude/settings.json                       # bundle/rspec allowlist
-├── CHANGELOG.md
 ├── CLAUDE.md                                   # you are here
 ├── Gemfile
 ├── LICENSE

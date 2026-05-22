@@ -42,8 +42,6 @@ maintenance gotchas.
   separate PRs.
 - Add or update specs for any behavior change. The suite must stay green
   on the full Ruby matrix (CI runs 2.7–4.0).
-- Add a line under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md)
-  describing the change (Added / Changed / Fixed / Removed).
 - Run `bundle exec rspec` and `bundle exec rubocop` locally before
   pushing.
 - Link the issue you're fixing in the PR description, if any.
