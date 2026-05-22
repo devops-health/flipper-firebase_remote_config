@@ -1,5 +1,9 @@
 # flipper-firebase_remote_config
 
+[![CI](https://github.com/devops-health/flipper-firebase_remote_config/actions/workflows/ci.yml/badge.svg)](https://github.com/devops-health/flipper-firebase_remote_config/actions/workflows/ci.yml)
+[![Gem Version](https://badge.fury.io/rb/flipper-firebase_remote_config.svg)](https://rubygems.org/gems/flipper-firebase_remote_config)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A [Flipper](https://www.flippercloud.io/docs) adapter that stores feature state
 in [Firebase Remote Config](https://firebase.google.com/docs/remote-config).
 Useful when you want flags reachable from both your Ruby backend and your
@@ -123,6 +127,15 @@ bundle exec rspec
 bundle exec rubocop
 ```
 
+## Contributing
+
+Bug reports and pull requests are welcome on GitHub at
+<https://github.com/devops-health/flipper-firebase_remote_config>. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for dev setup and PR guidelines.
+
+For security issues, please follow [SECURITY.md](SECURITY.md) rather than
+opening a public issue.
+
 ## License
 
-MIT.
+Released under the [MIT License](LICENSE).
