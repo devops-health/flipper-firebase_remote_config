@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+# OIDC trusted publishing to RubyGems — no API-key secret required.
+# Requires a trusted publisher to be configured for this gem on rubygems.org:
+#   https://guides.rubygems.org/trusted-publishing/
+# Settings: repo = <owner>/flipper-firebase_remote_config, workflow = release.yml
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish to RubyGems
+    runs-on: ubuntu-latest
+    environment: rubygems
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+      - name: Verify release tag matches gem version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          gem_version="$(ruby -Ilib -r flipper/adapters/firebase_remote_config/version \
+            -e 'print Flipper::Adapters::FirebaseRemoteConfig::VERSION')"
+          if [ "$tag" != "$gem_version" ]; then
+            echo "Release tag ($tag) does not match gem version ($gem_version)" >&2
+            exit 1
+          fi
+      - name: Run tests
+        run: bundle exec rspec
+      - name: Publish
+        uses: rubygems/release-gem@v1

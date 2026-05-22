@@ -147,18 +147,39 @@ standard):
    JSON-safe by default.
 4. Add a spec mirroring the existing "set gates" / "integer gates" patterns.
 
-## Release process (not yet wired up)
+## CI / Release workflows
 
-There's no published release yet (v0.1.0 unreleased). When cutting one:
+Two GitHub Actions workflows live in `.github/workflows/`:
+
+- `ci.yml` — on push to `main` and on every PR. Runs `bundler-audit` (CVE
+  scan), `rubocop`, and `rspec` across Ruby 3.1–3.3. Lint + security run
+  first; tests run only if both pass.
+- `release.yml` — on `release: published`. Verifies the GitHub release tag
+  (stripped of a leading `v`) matches `Flipper::Adapters::FirebaseRemoteConfig::VERSION`,
+  re-runs the tests, then publishes via `rubygems/release-gem@v1` using
+  **OIDC trusted publishing** — no `RUBYGEMS_API_KEY` secret is required.
+
+**One-time setup before the first release works:** configure a trusted
+publisher for this gem on rubygems.org
+(<https://guides.rubygems.org/trusted-publishing/>): repo
+`<owner>/flipper-firebase_remote_config`, workflow `release.yml`,
+environment `rubygems`. Without that, `release-gem` will fail to authenticate.
+
+To cut a release:
 
 1. Bump `VERSION` in `lib/flipper/adapters/firebase_remote_config/version.rb`.
 2. Update `CHANGELOG.md`.
-3. `bundle exec rake build` then `gem push pkg/...`.
+3. Merge to `main`.
+4. Create a GitHub release with tag `v<version>` (e.g. `v0.2.0`). The
+   workflow publishes automatically.
 
 ## Files at a glance
 
 ```
 flipper-firebase_remote_config/
+├── .github/workflows/
+│   ├── ci.yml                                  # CVE scan + lint + tests
+│   └── release.yml                             # OIDC publish to RubyGems
 ├── lib/flipper/adapters/
 │   ├── firebase_remote_config.rb              # the adapter
 │   └── firebase_remote_config/

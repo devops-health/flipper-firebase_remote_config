@@ -17,6 +17,7 @@ Gem::Specification.new do |spec|
   spec.add_dependency 'flipper', '>= 1.0', '< 2.0'
   spec.add_dependency 'googleauth', '>= 1.0'
 
+  spec.add_development_dependency 'bundler-audit', '~> 0.9'
   spec.add_development_dependency 'rake', '~> 13.0'
   spec.add_development_dependency 'rspec', '~> 3.12'
   spec.add_development_dependency 'rubocop', '~> 1.60'
