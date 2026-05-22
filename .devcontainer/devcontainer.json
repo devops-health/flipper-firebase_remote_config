@@ -1,0 +1,69 @@
+{
+  "name": "flipper-firebase_remote_config",
+  "dockerComposeFile": "../compose.yaml",
+  "service": "devcontainer",
+  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+
+  "initializeCommand": "mkdir -p ${localEnv:HOME}/.claude && touch ${localEnv:HOME}/.claude.json",
+
+  "mounts": [
+    "source=${localEnv:HOME}/.claude,target=/home/vscode/.claude,type=bind,consistency=cached",
+    "source=${localEnv:HOME}/.claude.json,target=/home/vscode/.claude.json,type=bind,consistency=cached"
+  ],
+
+  "remoteEnv": {
+    "ANTHROPIC_API_KEY": "${localEnv:ANTHROPIC_API_KEY}"
+  },
+
+  "remoteUser": "${localEnv:USER}",
+
+  // Features to add to the dev container. More info: https://containers.dev/features.
+  "features": {
+    // Add node to test github actions code:
+    "ghcr.io/devcontainers/features/node:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    // "ghcr.io/duplocloud/devcontainers/gcloud-cli:1.0.5": {},
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": { "moby": false },
+    "ghcr.io/eitsupi/devcontainer-features/jq-likes:2": {
+      "jqVersion": "latest",
+      "yqVersion": "latest"
+    }
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "Shopify.ruby-lsp",
+        "misogi.ruby-rubocop",
+        "kaiwood.endwise",
+        "editorconfig.editorconfig",
+        "redhat.vscode-yaml",
+        "github.vscode-github-actions",
+        "davidanson.vscode-markdownlint",
+        "eamodio.gitlens",
+        "streetsidesoftware.code-spell-checker",
+        "anthropic.claude-code"
+      ],
+      "settings": {
+        "[ruby]": {
+          "editor.defaultFormatter": "Shopify.ruby-lsp",
+          "editor.formatOnSave": true,
+          "editor.tabSize": 2,
+          "editor.insertSpaces": true,
+          "editor.rulers": [120],
+          "editor.semanticHighlighting.enabled": true
+        },
+        "rubyLsp.formatter": "rubocop",
+        "rubyLsp.linters": ["rubocop"],
+        "files.associations": {
+          "Gemfile": "ruby",
+          "Rakefile": "ruby",
+          "*.gemspec": "ruby"
+        },
+        "files.trimTrailingWhitespace": true,
+        "files.insertFinalNewline": true,
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  }
+}

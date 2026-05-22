@@ -1,0 +1,13 @@
+services:
+  devcontainer:
+    build:
+      target: devcontainer
+      args:
+        USER: ${USER:-me}
+
+    user: ${USER:-me}
+    
+    volumes:
+      - .:/workspaces/flipper-firebase_remote_config:cached
+    
+    command: sleep infinity
