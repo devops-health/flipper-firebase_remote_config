@@ -104,9 +104,9 @@ to extend `default_config` and the (de)serializers together.
 
 ## Running tests
 
-The system Ruby on this machine is 2.6 (too old). The Homebrew Ruby at
-`/opt/homebrew/opt/ruby@3.4/bin/ruby` is actually a 4.x build that satisfies
-`>= 3.0`. Tests:
+The system Ruby on this machine is 2.6 (below our `>= 2.7` floor). The
+Homebrew Ruby at `/opt/homebrew/opt/ruby@3.4/bin/ruby` is actually a 4.x
+build that satisfies the requirement. Tests:
 
 ```sh
 /opt/homebrew/opt/ruby@3.4/bin/bundle exec rspec
