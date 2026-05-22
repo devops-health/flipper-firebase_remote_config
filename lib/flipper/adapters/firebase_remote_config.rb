@@ -89,44 +89,12 @@ module Flipper
       end
 
       def enable(feature, gate, thing)
-        with_template do |template|
-          gates = read_gates(template, feature.key)
-          case gate.data_type
-          when :boolean
-            gates = default_config.merge(gate.key => thing.value.to_s)
-          when :integer
-            gates[gate.key] = thing.value.to_s
-          when :set
-            gates[gate.key] = (gates[gate.key] || Set.new) | [thing.value.to_s]
-          when :json
-            gates[gate.key] = thing.value
-          else
-            raise ArgumentError, "Unsupported gate data_type: #{gate.data_type.inspect}"
-          end
-          write_gates(template, feature.key, gates)
-          add_to_index(template, feature.key)
-        end
+        mutate_gates(feature) { |gates| apply_enable_gate(gates, gate, thing) }
         true
       end
 
       def disable(feature, gate, thing)
-        with_template do |template|
-          gates = read_gates(template, feature.key)
-          case gate.data_type
-          when :boolean
-            gates = default_config
-          when :integer
-            gates[gate.key] = thing.value.to_s
-          when :set
-            gates[gate.key] = (gates[gate.key] || Set.new) - [thing.value.to_s]
-          when :json
-            gates[gate.key] = nil
-          else
-            raise ArgumentError, "Unsupported gate data_type: #{gate.data_type.inspect}"
-          end
-          write_gates(template, feature.key, gates)
-          add_to_index(template, feature.key)
-        end
+        mutate_gates(feature) { |gates| apply_disable_gate(gates, gate, thing) }
         true
       end
 
@@ -139,6 +107,44 @@ module Flipper
       end
 
       private
+
+      def mutate_gates(feature)
+        with_template do |template|
+          gates = yield(read_gates(template, feature.key))
+          write_gates(template, feature.key, gates)
+          add_to_index(template, feature.key)
+        end
+      end
+
+      def apply_enable_gate(gates, gate, thing)
+        case gate.data_type
+        when :boolean
+          default_config.merge(gate.key => thing.value.to_s)
+        when :integer
+          gates.merge(gate.key => thing.value.to_s)
+        when :set
+          gates.merge(gate.key => (gates[gate.key] || Set.new) | [thing.value.to_s])
+        when :json
+          gates.merge(gate.key => thing.value)
+        else
+          raise ArgumentError, "Unsupported gate data_type: #{gate.data_type.inspect}"
+        end
+      end
+
+      def apply_disable_gate(gates, gate, thing)
+        case gate.data_type
+        when :boolean
+          default_config
+        when :integer
+          gates.merge(gate.key => thing.value.to_s)
+        when :set
+          gates.merge(gate.key => (gates[gate.key] || Set.new) - [thing.value.to_s])
+        when :json
+          gates.merge(gate.key => nil)
+        else
+          raise ArgumentError, "Unsupported gate data_type: #{gate.data_type.inspect}"
+        end
+      end
 
       def default_config
         {

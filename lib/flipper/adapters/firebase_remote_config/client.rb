@@ -19,10 +19,9 @@ module Flipper
       # Why hand-rolled instead of a generated client: there is no published
       # service gem for `firebaseremoteconfig_v1` — neither bundled inside the
       # (deprecated) `google-api-client` umbrella, nor as a stand-alone
-      # `google-apis-firebaseremoteconfig_v1`. We still lean on `googleauth`
-      # (which `google-api-client` pulls in transitively) to do the OAuth2
-      # service-account dance, and use Net::HTTP for the two endpoints we
-      # actually need.
+      # `google-apis-firebaseremoteconfig_v1`. We use `googleauth` directly
+      # for the OAuth2 service-account flow, and Net::HTTP for the two
+      # endpoints we actually need.
       class Client
         attr_reader :project_id
 
