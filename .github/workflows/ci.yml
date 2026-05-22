@@ -3,7 +3,25 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.devcontainer/**'
+      - '.claude/**'
+      - '.ruby-lsp/**'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/dependabot.yml'
   pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.devcontainer/**'
+      - '.claude/**'
+      - '.ruby-lsp/**'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/dependabot.yml'
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
