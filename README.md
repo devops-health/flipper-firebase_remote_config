@@ -64,6 +64,106 @@ equivalent custom role granting `cloudconfig.configs.get` and
 - A pre-built `Google::Auth::*` credentials object
 - `nil` to fall back to Application Default Credentials
 
+## Memoization
+
+This adapter already caches the fetched Remote Config template in-process for
+`cache_ttl` seconds, but that cache is still a network round trip away the
+moment it expires or on a fresh process. Wrapping the adapter with
+`Flipper::Adapters::Memoizable` (process-wide, always on) or
+`Flipper::Middleware::Memoizer` (per-request, Rails/Rack) makes repeated
+checks of the *same* feature within a request/scope free, regardless of where
+`cache_ttl` currently sits.
+
+### `Flipper::Adapters::Memoizable` — always-on wrapping
+
+This is the wrapping shown in [Configuration](#configuration) above, and it's
+the right default for most apps:
+
+```ruby
+require 'flipper'
+require 'flipper/adapters/firebase_remote_config'
+require 'flipper/adapters/memoizable'
+
+Flipper.configure do |config|
+  config.adapter do
+    base = Flipper::Adapters::FirebaseRemoteConfig.new(
+      project_id:  ENV.fetch('FIREBASE_PROJECT_ID'),
+      credentials: ENV.fetch('GOOGLE_APPLICATION_CREDENTIALS'),
+    )
+    Flipper::Adapters::Memoizable.new(base)
+  end
+end
+```
+
+With no further configuration this memoizes forever (per process) until a
+write (`enable`, `disable`, `add`, `remove`, `clear`) invalidates the affected
+cache entry — reads never go stale beyond that, because writes go through the
+same `Memoizable` instance and expire what they touch.
+
+Outside of a Rack request — a Rake task or Sidekiq job that checks the same
+flag many times in a loop — you can scope memoization manually:
+
+```ruby
+Flipper.adapter.memoize = true # Flipper.adapter is the Memoizable instance configured above
+begin
+  Widget.find_each do |widget|
+    next unless Flipper.enabled?(:widget_export, widget)
+    # ...
+  end
+ensure
+  Flipper.adapter.memoize = false # also clears the cache
+end
+```
+
+### `Flipper::Middleware::Memoizer` — per-request, Rails/Rack
+
+If you'd rather scope caching to the lifetime of a single request (and avoid
+holding stale flag state across requests in long-lived processes), use the
+Rack middleware instead of, or alongside, `Memoizable`. It wraps whatever
+adapter `Flipper.instance` is using with `Memoizable` for the duration of the
+request and clears it in an `ensure` block afterwards.
+
+```ruby
+# config/initializers/flipper.rb
+require 'flipper'
+require 'flipper/adapters/firebase_remote_config'
+require 'flipper/middleware/setup_env'
+require 'flipper/middleware/memoizer'
+
+Flipper.configure do |config|
+  config.adapter do
+    Flipper::Adapters::FirebaseRemoteConfig.new(
+      project_id:  ENV.fetch('FIREBASE_PROJECT_ID'),
+      credentials: ENV.fetch('GOOGLE_APPLICATION_CREDENTIALS'),
+    )
+  end
+end
+
+Rails.application.config.middleware.use Flipper::Middleware::SetupEnv, -> { Flipper.instance }
+Rails.application.config.middleware.use Flipper::Middleware::Memoizer
+```
+
+`SetupEnv` puts the configured `Flipper.instance` into `request.env['flipper']`
+so `Memoizer` can find it; `Memoizer` then flips `memoize = true` on that
+instance's adapter before the request and `memoize = false` after.
+
+Useful options on `Flipper::Middleware::Memoizer`:
+
+```ruby
+Rails.application.config.middleware.use Flipper::Middleware::Memoizer,
+  preload: [:some_feature, :another_feature], # or `true` to preload every feature
+  unless:  ->(request) { request.path.start_with?('/assets') }
+```
+
+`preload` issues one upfront fetch for the listed (or all) features at the
+start of the request instead of lazily fetching on first check — worth
+turning on if a request is known to check many flags, since it collapses
+what would otherwise be several lazy `Memoizable` cache misses into one.
+
+If your app uses the `flipper-rails` gem, the equivalent setup is the
+`config.flipper.memoize` / `config.flipper.preload` initializer options that
+gem provides instead of wiring the middleware up by hand.
+
 ## Storage layout
 
 Each Flipper feature becomes one Remote Config parameter, named
