@@ -181,9 +181,93 @@ Any `ActiveSupport::Cache::Store` works — this is not a Redis feature:
 `flipper-dalli` is the same idea against Dalli directly rather than through
 ActiveSupport.
 
-Note that nothing currently notices a template published *outside* this
-process — someone editing flags in the Firebase console, or another app
-writing through this adapter — until the relevant layer expires on its own.
+A template published *outside* this process — someone flipping a flag in the
+Firebase console, or another app writing through this adapter — is only noticed
+when the layer in front of it expires, unless you run a listener. See
+[Noticing changes published elsewhere](#noticing-changes-published-elsewhere).
+
+## Noticing changes published elsewhere
+
+Someone flips a flag in the Firebase console. Without a listener, your processes
+keep serving the old value until whichever cache sits in front of the adapter
+expires — up to `cache_ttl`, or the full TTL of your cache store.
+
+A `Listener` closes that window:
+
+```ruby
+listener = Flipper::Adapters::FirebaseRemoteConfig::Listener.new(adapter, interval: 10)
+listener.start
+```
+
+That's the whole setup when the adapter's own cache is the only one you have.
+Each tick asks Remote Config for the current template *version* — a small call,
+not a template fetch — and only pulls the template when the version actually
+moves.
+
+If you have a cache store in front of the adapter, the listener can't reach it,
+so tell it what to expire. It hands you exactly the features that changed:
+
+```ruby
+listener.on_change do |changed_keys|
+  changed_keys.each { |key| cached.expire_feature_cache(key) }
+  cached.expire_get_all_cache
+end
+```
+
+Added and removed features count as changed, so a feature deleted in the console
+won't linger in your cache.
+
+### Where to start it
+
+**Threads do not survive `fork`.** A listener started before your server forks
+leaves a dead thread in every worker. Start it after the fork, from your
+server's own hook:
+
+```ruby
+# config/puma.rb — clustered mode
+on_worker_boot     { LISTENER.start }
+on_worker_shutdown { LISTENER.stop }
+```
+
+```ruby
+# Sidekiq — the highest-value case, since job processes are long-lived and
+# would otherwise sit on stale flags for the full TTL
+Sidekiq.configure_server do |config|
+  config.on(:startup)  { LISTENER.start }
+  config.on(:shutdown) { LISTENER.stop }
+end
+```
+
+For Puma in single mode, Sinatra, or plain Rack — anything not preloading and
+forking — start it from your initializer or `config.ru` and `at_exit { LISTENER.stop }`.
+Under Unicorn or Passenger, use `after_fork` / `:starting_worker_process`.
+
+Three things worth knowing:
+
+- **It never starts itself.** That's deliberate: an auto-starting listener would
+  also spin up in `rails console`, in rake tasks, and during
+  `assets:precompile`. Start it explicitly, from the hooks above.
+- **In Rails development, don't.** The listener holds a reference to an adapter
+  that code reloading orphans, so you leak a thread per reload. Guard it, or
+  skip it in development.
+- **Every process polls.** With a 10s interval and 50 processes that's 5
+  requests/second against Remote Config, forever. Reads aren't the quota that
+  bites — writes are — but a shared cache store lets one process's fetch serve
+  the fleet, which is the better shape at scale.
+
+### Using a different change signal
+
+`probe:` replaces the version check with your own. Anything that responds to
+`current_version`, or any callable, returning a version number:
+
+```ruby
+Listener.new(adapter, probe: -> { $redis.get('flipper:rc_version')&.to_i })
+```
+
+The listener doesn't care where the number came from — only that it changed.
+That's the seam for push: a Cloud Functions `onConfigUpdated` trigger writing
+`event.data.versionNumber` somewhere your processes can read cheaply, so they
+notice within a second instead of within an interval.
 
 ## Storage layout
 
@@ -312,10 +396,10 @@ this adapter is the wrong tool.
   you change a parameter's `conditionalValues` in the Firebase console, the
   adapter will not see those changes. Conditions may be exposed as a Flipper
   extension in a future release; PRs welcome.
-- **Detecting changes published elsewhere.** Nothing pushes or polls for
-  updates yet, so a publish made in the Firebase console or by another process
-  is only picked up once the caching layer in front of it expires. See
-  [Caching and memoization](#caching-and-memoization).
+- **Push-based change detection.** The listener polls. There is no server-side
+  push API for Remote Config, so sub-second propagation means either a Cloud
+  Function webhook or the undocumented realtime stream the client SDKs use —
+  both plug into `probe:` but neither ships here yet.
 
 ## Why this gem talks REST directly
 
