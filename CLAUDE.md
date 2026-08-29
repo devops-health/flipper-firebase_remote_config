@@ -100,16 +100,41 @@ Two consequences, both deliberate:
   whose point is that both sides read the same parameters, that is closer to
   right than wrong.
 
+**One Firebase project per environment.** Staging and production must not share
+one. Parameter names are the feature keys with nothing prepended, so a flag
+flipped in staging lands directly on production's flags — there is no namespace
+left to keep them apart.
+
+Firebase reaches the same conclusion independently: builds that differ by
+release status shouldn't share resources, because debug data ends up polluting
+or overriding production data, and it recommends a separate project for each
+environment in the workflow. See
+<https://firebase.google.com/docs/projects/dev-workflows/general-best-practices#registering-app-variants>.
+
+Note the distinction it draws — platform variants of the *same* app (iOS,
+Android, web) belong in one project, which is exactly the case this gem is built
+for. It's release status that separates projects, not platform.
+
 **Multi-tenancy: one Firebase project per tenant, for now.** Dropping the prefix
 removed the only isolation the adapter had — two tenants sharing a project would
 collide on parameter names, silently overwriting each other's flags. Separate
 projects also stop tenants sharing a write quota that is only a few hundred
 publishes a day.
 
-This is worth revisiting if someone actually needs multiple tenants in one
-project. Both plausible answers — a restored prefix, or a per-tenant namespace —
-reintroduce naming or endpoint complexity that this change deliberately removed,
-so it should be a considered decision rather than a quiet re-add.
+Firebase's own guidance points the same way, and for broader reasons than ours:
+housing logically independent apps in one project risks configuration and data
+privacy problems — analytics aggregated across tenants, shared authentication,
+database structures that get complicated, security rules that get hard to reason
+about. Its recommendation is to register each app in its own project, including
+each branded variant of a white-label product. See
+<https://firebase.google.com/docs/projects/dev-workflows/general-best-practices#avoiding-multi-tenancy>.
+
+So the stance here isn't only a consequence of dropping the prefix — it's what
+Firebase recommends regardless. Still worth revisiting if someone genuinely
+needs multiple tenants in one project, but the bar is higher than "the adapter
+could support it": both plausible answers, a restored prefix or a per-tenant
+namespace, reintroduce the naming or endpoint complexity this change removed,
+and neither addresses the concerns above.
 
 The in-memory template is a plain `Hash` matching the API JSON shape — not a
 typed model object. See "Why no generated client" below.
