@@ -180,9 +180,20 @@ yet.
 - **Don't add live integration tests to the default `rspec` run.** Hitting
   real Firebase from CI burns the project's write quota.
 - **Don't bump the ETag retry budget past 1.** See above.
-- **Don't change the parameter name format** without a migration path —
-  existing deployments have parameters named `flipper__foo` and the index at
-  `flipper____index__`. Renaming silently orphans flags.
+- **Parameter names are a client-visible interface.** Mobile and web clients
+  read these parameters by name, so a rename is a breaking change for every app,
+  not an internal refactor.
+
+  The `flipper__` prefix and the `<prefix>__index__` sentinel are both on their
+  way out: they leak an implementation detail into names the apps see, and the
+  index is a second source of truth that stops the Firebase console from being
+  able to *create* a flag — only edit one — which contradicts the positioning
+  above. The target is the feature key verbatim, with `valueType` distinguishing
+  a Flipper feature from the app's own parameters.
+
+  There are no real deployments yet, so this rename is free **now**. Once apps
+  ship against these names it stops being free, and this rule reverts to its
+  original meaning: don't rename without a migration path.
 - **Don't expose Remote Config conditions as a new user-facing concept.** An
   `#enable_for_condition` that lets callers write arbitrary conditions is still
   the wrong idea — it becomes a second, competing way to express a flag.
