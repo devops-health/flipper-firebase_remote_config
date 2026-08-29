@@ -32,6 +32,9 @@ Naming/PredicateMethod:
     - clear
     - enable
     - disable
+    # Listener#tick performs a poll and reports whether it did any work.
+    # `tick?` would read as a question it isn't.
+    - tick
 
 # Flipper's adapter interface defines get_multi / get_all. Allow get_ prefixes
 # in the adapter file only.
