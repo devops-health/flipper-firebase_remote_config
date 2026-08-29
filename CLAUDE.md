@@ -91,20 +91,30 @@ from the template itself via `flipper_feature?`: a parameter counts if its
 gate keys. The template is already fetched in one GET, so scanning its keys
 costs nothing that reading an index parameter out of that same template didn't.
 
-That the JSON test demands the complete set is deliberate, not fussiness. Every
-blob we write starts from `default_config` and so always carries all five, while
-matching on any single key would claim an app's own config — `{"groups": [...]}`
-is an ordinary thing to find in a mobile app's parameters, and `actors` is no
-stranger. Don't loosen it.
+That the JSON test demands the complete set is deliberate, not fussiness. The
+distinction it draws is **type, not ownership**: a boolean parameter is a
+toggle, but structured JSON config is not, and `{"groups": [...]}` is an
+ordinary thing to find in a mobile app's parameters — `actors` is no stranger.
+Matching on any single key would claim it as a feature and let a `disable`
+flatten structured config into `BOOLEAN false`.
 
-Two consequences, both deliberate:
+Every blob we write starts from `default_config` and so always carries all
+five keys, which makes the strict test free. Don't loosen it.
 
-- A `BOOLEAN` parameter created directly in the Firebase console **is** a
-  feature here. The old index made that impossible — the console could edit a
-  flag but never create one, which contradicted the positioning above.
-- An app's own `BOOLEAN` parameter also shows up as a feature. For an adapter
-  whose point is that both sides read the same parameters, that is closer to
-  right than wrong.
+This is the intended model, not a side effect: **a `BOOLEAN` Remote Config
+parameter is a feature toggle.** The Firebase console and `Flipper.enable` /
+`Flipper.disable` are two interfaces onto the same thing, exactly as Flipper's
+other adapters let you write through the DSL or straight into the store. There
+is no notion of a parameter belonging to the app rather than to Flipper.
+
+So a boolean parameter created in the console is a feature, and so is one the
+mobile team added last year without thinking about Flipper. Both are togglable
+from either side. The old index made this impossible — the console could edit a
+flag but never create one, which contradicted the positioning above.
+
+What is *not* a feature is a parameter that isn't a toggle at all: a `STRING`,
+a `NUMBER`, or structured `JSON` config. Those are ignored — see the gate-key
+test below.
 
 **One Firebase project per environment.** Staging and production must not share
 one. Parameter names are the feature keys with nothing prepended, so a flag
