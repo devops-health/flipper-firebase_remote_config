@@ -100,6 +100,17 @@ Two consequences, both deliberate:
   whose point is that both sides read the same parameters, that is closer to
   right than wrong.
 
+**Multi-tenancy: one Firebase project per tenant, for now.** Dropping the prefix
+removed the only isolation the adapter had — two tenants sharing a project would
+collide on parameter names, silently overwriting each other's flags. Separate
+projects also stop tenants sharing a write quota that is only a few hundred
+publishes a day.
+
+This is worth revisiting if someone actually needs multiple tenants in one
+project. Both plausible answers — a restored prefix, or a per-tenant namespace —
+reintroduce naming or endpoint complexity that this change deliberately removed,
+so it should be a considered decision rather than a quiet re-add.
+
 The in-memory template is a plain `Hash` matching the API JSON shape — not a
 typed model object. See "Why no generated client" below.
 
