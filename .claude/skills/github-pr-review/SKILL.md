@@ -89,33 +89,98 @@ Options:
 
 ### Technical Workflow
 
-**ALWAYS use the pending review pattern, even for single comments:**
+**ALWAYS use the pending review pattern, even for single comments.**
 
-```bash
-# Step 1: Create PENDING review (no event field)
-gh api repos/:owner/:repo/pulls/<PR_NUMBER>/reviews \
-  -X POST \
-  -f commit_id="<COMMIT_SHA>" \
-  -f 'comments[][path]=path/to/file.ts' \
-  -F 'comments[][line]=<LINE_NUMBER>' \
-  -f 'comments[][side]=RIGHT' \
-  -f 'comments[][body]=Comment text
+**Build the request body as JSON and pass it with `--input`.** The repeated
+`-f 'comments[][path]'` flag form is fragile: with more than one comment, or
+with bodies containing newlines and ```suggestion fences, `gh` mis-assembles
+the array and the API rejects it with a 422 like:
 
-```suggestion
-// suggested code here
+```
+Variable $comments of type [DraftPullRequestReviewComment] was provided invalid
+value for 0.side (Field is not defined on DraftPullRequestReviewComment),
+0.position (Expected value to not be null)
 ```
 
-Additional explanation...' \
-  --jq '{id, state}'
+That error is misleading — `side` and `line` were supplied. It means the array
+was built wrong, not that the fields are unsupported. Use JSON instead:
 
+```bash
+# Step 1: write the payload (heredoc, or generate it if bodies are long)
+cat > /tmp/review.json <<'JSON'
+{
+  "commit_id": "<COMMIT_SHA>",
+  "comments": [
+    {
+      "path": "path/to/file.rb",
+      "line": 42,
+      "side": "RIGHT",
+      "body": "Comment text\n\n```suggestion\nfixed_code_here\n```\n\nExplanation."
+    }
+  ]
+}
+JSON
+
+# Step 2: create the PENDING review (no event field)
+gh api repos/:owner/:repo/pulls/<PR_NUMBER>/reviews \
+  --input /tmp/review.json --jq '{id, state}'
 # Returns: {"id": <REVIEW_ID>, "state": "PENDING"}
 
-# Step 2: Submit the pending review
+# Step 3: submit it
 gh api repos/:owner/:repo/pulls/<PR_NUMBER>/reviews/<REVIEW_ID>/events \
   -X POST \
   -f event="COMMENT" \
   -f body="Optional overall review message"
 ```
+
+For bodies with awkward quoting, generate the JSON with a script rather than
+hand-escaping it — a language's JSON encoder gets the escaping right, and
+shell quoting around embedded backticks and apostrophes is where this breaks.
+
+## Replying and Resolving Threads
+
+Two different APIs, and only one of them is REST.
+
+**Reply to a review comment** (REST — note it's the `pulls/comments` path, not
+`issues/comments`):
+
+```bash
+gh api repos/:owner/:repo/pulls/<PR_NUMBER>/comments/<COMMENT_ID>/replies \
+  -X POST --input /tmp/reply.json
+```
+
+Get comment IDs with:
+
+```bash
+gh api repos/:owner/:repo/pulls/<PR_NUMBER>/comments --jq '.[] | {id, path, body: .body[0:60]}'
+```
+
+**Resolving a thread is GraphQL only.** There is no REST endpoint for it. You
+need the *thread* ID, which is not the comment ID:
+
+```bash
+# Find thread IDs
+gh api graphql -f query='
+query {
+  repository(owner: "OWNER", name: "REPO") {
+    pullRequest(number: PR_NUMBER) {
+      reviewThreads(first: 20) {
+        nodes { id isResolved comments(first: 1) { nodes { path } } }
+      }
+    }
+  }
+}' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | "\(.id) resolved=\(.isResolved)"'
+
+# Resolve one
+gh api graphql -f query='
+  mutation($id: ID!) {
+    resolveReviewThread(input: {threadId: $id}) { thread { id isResolved } }
+  }' -f id="PRRT_..."
+```
+
+Resolve a thread only once the feedback has actually been addressed, and reply
+saying what changed before resolving — a resolved thread with no reply leaves
+the author guessing whether it was fixed or waved away.
 
 ## Event Types
 
@@ -141,42 +206,53 @@ gh repo view --json owner,name
 
 ### Required Parameters
 
+Top level of the JSON payload:
+
 - `commit_id`: Latest commit SHA from the PR
-- `comments[][path]`: File path relative to repo root
-- `comments[][line]`: End line number (use `-F` for numbers)
-- `comments[][side]`: Use `RIGHT` for added/modified lines (most common), `LEFT` for deleted lines
-- `comments[][body]`: Comment text with optional ```suggestion block
+
+Each entry in the `comments` array:
+
+- `path`: File path relative to repo root
+- `line`: End line number (a JSON number, not a string)
+- `side`: `RIGHT` for added/modified lines (most common), `LEFT` for deleted lines
+- `body`: Comment text with optional ```suggestion block
 
 ### Optional Parameters
 
-- `comments[][start_line]`: For multi-line code suggestions (use `-F`)
-- `event`: Omit for PENDING, or use `COMMENT`/`APPROVE`/`REQUEST_CHANGES`
+- `start_line` on a comment: for multi-line code suggestions
+- `event`: omit entirely to create a PENDING review; pass
+  `COMMENT`/`APPROVE`/`REQUEST_CHANGES` on the separate `/events` call
 
 ### Syntax Rules
 
 ✅ **DO:**
-- Use single quotes around parameters with `[]`: `'comments[][path]'`
-- Use `-f` for string values
-- Use `-F` for numeric values (line numbers)
+- Build the review body as JSON and pass it with `--input`
+- Generate that JSON with a script when bodies are long or contain backticks
+- Use `-f` / `-F` for the simple scalar params on the submit call
 - Use triple backticks with `suggestion` identifier for code suggestions
 
 ❌ **DON'T:**
-- Use double quotes around `comments[][]` parameters
-- Mix up `-f` and `-F` flags
+- Use repeated `-f 'comments[][...]'` flags for multi-comment reviews — they
+  mis-assemble into a 422 that blames `side` or `position`
+- Hand-escape multiline bodies into a shell string
 - Forget to get commit SHA first
 
 ## Code Suggestions Format
 
-```bash
--f 'comments[][body]=Your comment explaining the issue
+In the JSON payload a suggestion is just newlines inside the `body` string:
 
-```suggestion
-// The suggested code that will replace the specified line(s)
-const fixed = "like this";
+```json
+{
+  "path": "src/auth.ts",
+  "line": 20,
+  "side": "RIGHT",
+  "body": "Your comment explaining the issue\n\n```suggestion\nconst fixed = \"like this\";\n```\n\nAdditional context after the suggestion."
+}
 ```
 
-Additional context or explanation after the suggestion.'
-```
+This is the main reason to generate the JSON with a script: escaping those
+newlines, quotes and backticks by hand is error-prone, and getting it wrong
+produces a 422 that points at the wrong field.
 
 **Important**: Code suggestions replace the entire line or line range. Make sure the suggested code is complete and correct.
 
@@ -209,7 +285,9 @@ const example = "value";
 |---------|-----|
 | Posting immediately under time pressure | Still create pending review first - can submit immediately after |
 | "Only one comment so no need for pending" | Use pending anyway - consistent workflow, allows adding more later |
-| Forgetting single quotes around `comments[][]` | Always quote: `'comments[][path]'` not `comments[][path]` |
+| Building comments with repeated `-f 'comments[][...]'` flags | Write JSON and use `--input` — the flag form 422s on multi-comment or multiline bodies |
+| Looking for a REST endpoint to resolve a thread | There isn't one. Use the GraphQL `resolveReviewThread` mutation |
+| Passing a comment ID to `resolveReviewThread` | It needs the *thread* ID (`PRRT_...`) from the `reviewThreads` query |
 | Not getting commit SHA | Run `gh pr view <NUMBER> --json commits --jq '.commits[-1].oid'` |
 | Using wrong event type | Security/bugs → REQUEST_CHANGES, Style → APPROVE, Questions → COMMENT |
 
@@ -270,23 +348,20 @@ Ready to post this review?
 **Step 2: After approval, post the review**
 
 ```bash
-# Create pending review with multiple comments
-gh api repos/:owner/:repo/pulls/123/reviews \
-  -X POST \
-  -f commit_id="abc123" \
-  -f 'comments[][path]=src/auth.ts' \
-  -F 'comments[][line]=20' \
-  -f 'comments[][side]=RIGHT' \
-  -f 'comments[][body]=First issue...' \
-  -f 'comments[][path]=src/auth.ts' \
-  -F 'comments[][line]=35' \
-  -f 'comments[][side]=RIGHT' \
-  -f 'comments[][body]=Second issue...' \
-  -f 'comments[][path]=tests/auth.test.ts' \
-  -F 'comments[][line]=12' \
-  -f 'comments[][side]=RIGHT' \
-  -f 'comments[][body]=Third issue...' \
-  --jq '{id, state}'
+# Write the payload as JSON — three comments in one array
+cat > /tmp/review.json <<'JSON'
+{
+  "commit_id": "abc123",
+  "comments": [
+    { "path": "src/auth.ts",        "line": 20, "side": "RIGHT", "body": "First issue..."  },
+    { "path": "src/auth.ts",        "line": 35, "side": "RIGHT", "body": "Second issue..." },
+    { "path": "tests/auth.test.ts", "line": 12, "side": "RIGHT", "body": "Third issue..."  }
+  ]
+}
+JSON
+
+# Create the pending review
+gh api repos/:owner/:repo/pulls/123/reviews --input /tmp/review.json --jq '{id, state}'
 
 # Submit with appropriate event type
 gh api repos/:owner/:repo/pulls/123/reviews/<REVIEW_ID>/events \
