@@ -85,7 +85,12 @@ module Flipper
           req_class = method == :get ? Net::HTTP::Get : Net::HTTP::Put
           req = req_class.new(uri)
           headers.each { |k, v| req[k] = v }
-          @credentials&.apply!(req.to_hash.merge('Authorization' => nil))
+          # Deliberately not calling @credentials.apply! here. googleauth's
+          # apply! refreshes the token itself (BaseClient#apply! ->
+          # fetch_access_token! if needs_access_token?), which would happen
+          # outside @token_mutex and on the same 60s window fetch_access_token
+          # uses — leaving the refresh unserialized and token_stale? never true.
+          # It also wrote into a throwaway hash whose result was discarded.
           token = fetch_access_token
           req['Authorization'] = "Bearer #{token}" if token
           req.body = body if body

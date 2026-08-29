@@ -11,8 +11,13 @@ class FakeCredentials
     @applied      = []
   end
 
+  # Mirrors Google::Auth::BaseClient#apply!, which refreshes the token before
+  # writing the header. Without that, a client calling apply! outside its own
+  # mutex looks correctly serialized in specs when it isn't.
   def apply!(headers)
     @applied << headers
+    fetch_access_token! if @access_token.nil? || expires_within?(60)
+    headers['authorization'] = "Bearer #{@access_token}"
   end
 
   def fetch_access_token!

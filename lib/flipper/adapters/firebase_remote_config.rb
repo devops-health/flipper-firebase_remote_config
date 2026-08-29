@@ -127,6 +127,13 @@ module Flipper
 
       # Fetch the current template, install it, and return it. This is what a
       # Listener calls once its probe says the version moved.
+      #
+      # The fetch happens outside the monitor, so a listener fetch that started
+      # before a local write can install the older template over the newer one.
+      # It self-heals — the next probe sees the version moved, and a write racing
+      # it hits a 412 and retries — and the window is smaller than the cache_ttl
+      # staleness this adapter already accepts. Holding the monitor across the
+      # GET instead would block every reader for the length of a fetch.
       def refresh!
         template, etag = @client.fetch_template
         swap_cache(template, etag)

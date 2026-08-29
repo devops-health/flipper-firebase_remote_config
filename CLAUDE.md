@@ -157,13 +157,13 @@ typed model object. See "Why no generated client" below.
 
 **The `defaultValue.value` encoding is client-visible.** Mobile and web clients
 fetch these same parameters, so the JSON blob is not free to restructure — a
-change here breaks every app parsing it. This is also the main thing standing
-between the gem and its own positioning: `getBoolean()` on a gate blob returns
-`false`, so clients can't consume it natively. Writing simple boolean features
-as a real `BOOLEAN` parameter (falling back to the blob only when a feature uses
-actor/group/percentage gates) is the planned fix. Note the sharp edge that
-design carries: a feature that starts boolean-only and later gains an actor gate
-silently flips **off** for every client, because `getBoolean()` fails soft.
+change here breaks every app parsing it.
+
+Simple boolean features are stored as real `BOOLEAN` parameters, falling back to
+the blob only when a feature uses actor, group or percentage gates. Note the
+sharp edge that carries: `getBoolean()` on a blob returns `false` rather than
+erroring, so a feature that starts boolean-only and later gains an actor gate
+silently flips **off** for every client.
 
 ## Why no generated Google API client
 
