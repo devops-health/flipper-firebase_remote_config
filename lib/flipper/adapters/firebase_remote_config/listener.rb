@@ -25,8 +25,17 @@ module Flipper
       #
       # Threads do not survive `fork`, so never start a listener before one — in
       # clustered Puma use `on_worker_boot`, in Sidekiq use `config.on(:startup)`.
-      # A pid change is detected and the thread respawned, but that is a
-      # backstop, not a substitute for wiring it up correctly.
+      #
+      # After a fork the pid check makes #alive? false, so a later #start spawns
+      # a fresh thread rather than returning early on the inherited one. That is
+      # all it does — **nothing calls #start for you, and there is no respawn**.
+      # A child that never calls it has @running still true from the parent and a
+      # thread that didn't survive, and polls nothing.
+      #
+      # Note this differs from Flipper's own poller, which does self-heal:
+      # Flipper::Poller#start opens with `reset if forked?` and
+      # Adapters::Poll#synced_adapter calls #start on every read, so a forked
+      # child repairs itself on first use. Don't assume that behaviour here.
       class Listener
         DEFAULT_INTERVAL = 10
         MINIMUM_INTERVAL = 1

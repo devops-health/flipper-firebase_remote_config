@@ -152,12 +152,15 @@ firebase = Flipper::Adapters::FirebaseRemoteConfig.new(
   cache_ttl:   0, # see below — this is load-bearing
 )
 
+cached = Flipper::Adapters::ActiveSupportCacheStore.new(firebase, Rails.cache, expires_in: 5.minutes)
+
 Flipper.configure do |config|
-  config.adapter do
-    Flipper::Adapters::ActiveSupportCacheStore.new(firebase, Rails.cache, expires_in: 5.minutes)
-  end
+  config.adapter { cached }
 end
 ```
+
+Keep a reference to `cached` — the listener needs it to expire entries, and a
+store built inline inside the `config.adapter` block has no name to call.
 
 > **Set `cache_ttl: 0` whenever a cache store is in front.**
 >
@@ -216,6 +219,27 @@ end
 
 Added and removed features count as changed, so a feature deleted in the console
 won't linger in your cache.
+
+### Why not `Flipper::Adapters::Poll`?
+
+Flipper ships `Poll` and `Flipper::Poller` for what looks like this job — poll a
+remote adapter on an interval and serve reads from a threadsafe in-memory copy.
+Three reasons this adapter doesn't use them:
+
+- **`Poll` calls `get_all` every tick**, which here means fetching the entire
+  template. The version probe means an unchanged template costs a small
+  `listVersions` response instead. The request count is the same either way —
+  the saving is transfer and parse, not read quota.
+- **`Poll` can't tell you *what* changed.** Handing `on_change` the exact feature
+  keys is what makes the cache-store wiring above possible; otherwise you'd blow
+  the whole cache on every tick.
+- **`Poll` replaces your adapter** with a synced `Memory` adapter. `Listener`
+  leaves this adapter in place and refreshes its cache, so writes still go
+  through the ETag path.
+
+One thing `Poll` does handle that this doesn't: it self-heals across `fork`,
+because `Poll` calls `Poller#start` on every read and `Poller#start` resets when
+it sees a new pid. Nothing here calls `start` for you — hence the next section.
 
 ### Where to start it
 
@@ -389,9 +413,9 @@ Remote Config uses ETag-based optimistic concurrency. The adapter:
 2. Mutates a private copy of the template in memory, so concurrent readers
    never observe a half-applied write.
 3. Publishes with `If-Match: <etag>`.
-4. On a `412 Precondition Failed`, reloads and retries **once**. If the retry
-   also fails, `Flipper::Adapters::FirebaseRemoteConfig::ETagMismatch` is
-   raised.
+4. On a conflict — `412 Precondition Failed`, or `409 Conflict` — reloads and
+   retries **once**. If the retry also fails,
+   `Flipper::Adapters::FirebaseRemoteConfig::ETagMismatch` is raised.
 
 If you have a write-heavy multi-process workload that frequently conflicts,
 this adapter is the wrong tool.
