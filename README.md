@@ -295,11 +295,19 @@ have no meaning to a client:
 }
 ```
 
-The adapter recognises which parameters are features by their type: a parameter
-counts if it's `BOOLEAN`, or if its value parses as the gate shape above. One
-consequence worth knowing in both directions — **a `BOOLEAN` parameter you
-create directly in the Firebase console is a real Flipper feature**, and so is
-any boolean parameter your app already had.
+The adapter recognises features by type rather than by name: a parameter counts
+if it's `BOOLEAN`, or if its value parses as the full gate shape above.
+
+Which means **a `BOOLEAN` parameter is a feature toggle, wherever it came
+from** — one you create in the Firebase console, or one your app has had for a
+year. The console and `Flipper.enable` / `Flipper.disable` are two ways to flip
+the same switch, and either can create it. That's the point of the gem rather
+than a quirk of it.
+
+Parameters that aren't toggles are left alone. A `STRING`, a `NUMBER`, or
+structured `JSON` config won't appear in `Flipper.features` and won't be
+touched — the JSON test requires the complete set of gate keys, so an app's own
+`{"groups": [...]}` isn't mistaken for a feature.
 
 ### One Firebase project per environment
 
