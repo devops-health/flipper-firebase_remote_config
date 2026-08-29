@@ -279,17 +279,19 @@ These only cover the JSON fallback form; boolean-only features go through
 
 ## Running tests
 
-The system Ruby is 2.6, below our `>= 2.7` floor. Ruby is managed by **mise**
-here, pinned by `.ruby-version`, so an activated shell has the right one:
+The system Ruby is 2.6, below our `>= 2.7` floor, so you need a version manager
+of your own — **mise** works well. `.ruby-version` is gitignored, so pick any
+ruby the gemspec accepts; CI runs the suite on 2.7 through 4.0.
 
 ```sh
 bundle exec rspec
 ```
 
-Two traps. A non-interactive shell may not have mise activated and will fall
-through to system Ruby 2.6 — check `ruby -v` before trusting a failure. And if
-`.ruby-version` pins a version mise hasn't installed, mise installs it on first
-use, which looks like a hang for several minutes.
+Two traps. A non-interactive shell may not have your version manager activated
+and will fall through to system Ruby 2.6 — check `ruby -v` before trusting a
+failure. And if your local `.ruby-version` names a version mise hasn't
+installed, mise installs it on first use, which presents as a hang for several
+minutes rather than as an error.
 
 `.claude/settings.json` allowlists the bare `bundle`/`rspec`/`rubocop`/`gem`
 commands — deliberately not absolute paths, which is what went stale last time.
