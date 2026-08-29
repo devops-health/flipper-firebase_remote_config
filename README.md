@@ -22,9 +22,11 @@ hundreds of writes/day). This makes it a poor fit for:
 It is a good fit for low-frequency operational toggles that you want a single
 source of truth for across server and client platforms.
 
-**Always wrap this adapter with [`Flipper::Adapters::Memoizable`](https://www.flippercloud.io/docs/adapters/memoizable)
-or the per-request `Flipper::Middleware::Memoizer`** to avoid a Remote Config
-fetch on every flag check.
+**Don't run it without a caching layer**, or you'll pay a Remote Config fetch on
+every flag check. `Flipper::DSL` already wraps your adapter in `Memoizable`, but
+that memoizes nothing until something turns it on — see
+[Caching and memoization](#caching-and-memoization) for what to put in front of
+it and how the layers interact.
 
 ## Installation
 
@@ -202,6 +204,52 @@ representing the gate state:
 
 A sentinel parameter `<prefix>__index__` holds a JSON array of all known
 feature keys, so listing features doesn't have to scan every parameter.
+
+## Reading these flags from a client app
+
+This is the point of the gem — the same parameter, flipped in one place, read by
+both the backend and your Firebase-using apps — but **it does not work out of the
+box today**, and it's worth being clear about why before you build on it.
+
+A client SDK reading `flipper__search` gets the raw JSON string shown above, not
+a boolean. `getBoolean()` on it returns `false`. Clients have to parse the gate
+blob themselves:
+
+```swift
+// Swift — Firebase iOS SDK
+let raw = RemoteConfig.remoteConfig()["flipper__search"].stringValue
+let gates = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any]
+let enabled = (gates?["boolean"] as? String) == "true"
+```
+
+```kotlin
+// Kotlin — Firebase Android SDK
+val raw = Firebase.remoteConfig.getString("flipper__search")
+val enabled = JSONObject(raw).optString("boolean") == "true"
+```
+
+```js
+// JavaScript — Firebase Web SDK
+const raw = getValue(remoteConfig, 'flipper__search').asString();
+const enabled = JSON.parse(raw).boolean === 'true';
+```
+
+Two limits follow from this, and they matter more than the parsing:
+
+- **Only the `boolean` gate has any client-side meaning.** Actor, group and
+  percentage gates are evaluated per-actor by the Ruby backend; a client has no
+  actor to evaluate them against. A client reading a feature that is enabled for
+  25% of actors sees `"boolean": null` and should treat the feature as off.
+- **So features you intend clients to read should be flipped with plain
+  `Flipper.enable(:search)` / `Flipper.disable(:search)`** — not with actor or
+  percentage gates. Coordinating a *release* across backend and app works today;
+  coordinating a gradual *ramp* does not.
+
+Ignore the `flipper____index__` parameter — it's bookkeeping for the adapter.
+
+A client-native value format (writing simple boolean features as a real
+`BOOLEAN` parameter, so `getBoolean()` just works) and percentage rollouts
+authored as real Remote Config conditions are both planned; neither has landed.
 
 ## Concurrency and retries
 
