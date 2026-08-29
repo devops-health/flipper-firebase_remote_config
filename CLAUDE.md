@@ -191,15 +191,60 @@ that by bumping the retry count.
 
 `load_template` caches `{template, etag}` for `cache_ttl` seconds (default 30s).
 Every successful write calls `reload!` so the next read pulls fresh state.
-External writes (e.g., someone editing in the Firebase console) are not
-detected until the TTL expires.
 
-Recommended deployment: also wrap with `Flipper::Adapters::Memoizable` for
-per-request caching, on top of this adapter's TTL cache. That gives:
+Writes from elsewhere — the Firebase console, another process — are picked up by
+`Listener` if one is running, and otherwise not until the TTL expires.
 
-- Per-request: zero Remote Config calls (memoized in the request)
-- Across requests within TTL: one cached `GET` per process per `cache_ttl`
-- After TTL: one `GET` then back to cached
+Note that `cache_ttl` and a shared cache store are mutually exclusive in
+practice: put an `ActiveSupportCacheStore` in front and this in-process cache
+becomes the layer nothing can invalidate, since expiring a Redis or memcached key
+cannot reach an ivar inside each process. Use `cache_ttl: 0` behind one.
+
+## The listener
+
+`Listener` (its own file — the adapter class is already near the 250-line
+`Metrics/ClassLength` cap) polls for template changes and keeps the adapter's
+cache current, so a console publish reaches a running process in seconds.
+
+Why polling at all: there is no server-side push. Firebase's own server guidance
+recommends periodically reloading the template and describes no streaming
+mechanism for servers. The realtime endpoint the client SDKs use is a client API
+— see "Things to be careful about".
+
+Design decisions that are easy to undo by accident:
+
+- **The probe is `listVersions`, not a template fetch.** One version's metadata
+  is cheap enough to poll; the template isn't. A conditional GET would be
+  cheaper still, but `If-None-Match` is not honoured on the template endpoint —
+  tested against a live project, it always returns 200 with a full body.
+- **The poll waits on a `ConditionVariable`, not `sleep`.** That's what makes
+  `stop` prompt instead of blocking for the rest of an interval. Don't "simplify"
+  it back to a sleep.
+- **The interval is jittered ±30%.** Without it every process in a fleet wakes on
+  the same second and stampedes the API.
+- **No exception escapes the loop.** A Remote Config blip must not silently end
+  change detection for the life of the process; failures back off to 5 minutes.
+- **The first tick establishes a baseline and reports nothing.** Otherwise every
+  feature looks new and the first poll fires a change for all of them.
+- **It never auto-starts.** Threads don't survive `fork`, and a listener started
+  at adapter construction would also start in `rails console`, rake tasks and
+  `assets:precompile`. The pid check that respawns after a fork is a backstop,
+  not a substitute for `on_worker_boot` / Sidekiq's `:startup`.
+
+`on_change` handlers exist only for caches the listener can't reach itself — a
+shared store in front of the adapter. The adapter's own cache is updated by
+`refresh!` with no handler required, so don't add a default handler that calls
+`reload!`; it would be redundant work.
+
+`probe:` is the seam for push sources. Anything answering `#current_version`, or
+any callable, returning a version number. Two deferred paths plug in here
+without touching the listener: a Cloud Function webhook writing the version into
+a shared cache store, and the realtime stream. Both are described in
+test-tracker#469. The listener must stay ignorant of where the number came from.
+
+`tick` is public so specs can drive the loop inline. Keep it that way — the four
+thread-lifecycle examples are the only ones that start a real thread, and that
+ratio is why the suite is still fast and not flaky.
 
 ## Gate serialization
 
