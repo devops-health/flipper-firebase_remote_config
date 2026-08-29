@@ -158,6 +158,28 @@ RSpec.describe Flipper::Adapters::FirebaseRemoteConfig do
       client.fetch_template.first
     end
 
+    # A blob written by this adapter always has boolean as "true" or nil, so
+    # only a human editing in the console produces "false" here — and the
+    # console is now a first-class way to author flags.
+    it 'does not switch a feature on when a console blob narrows to boolean-only' do
+      external, etag = client.fetch_template
+      external['parameters']['search'] = {
+        'valueType' => 'JSON',
+        'defaultValue' => { 'value' => JSON.generate(
+          'boolean' => 'false', 'actors' => ['1'], 'groups' => [],
+          'percentage_of_actors' => nil, 'percentage_of_time' => nil
+        ) }
+      }
+      client.publish_template(external, etag)
+      adapter.reload!
+
+      feature.disable_actor(Flipper::Actor.new('1'))
+
+      param = template['parameters']['search']
+      expect(param.dig('defaultValue', 'value')).to eq('false')
+      expect(flipper[:search].enabled?(Flipper::Actor.new('2'))).to be(false)
+    end
+
     it 'names the parameter for the feature key, with no prefix' do
       feature.enable
       expect(template['parameters'].keys).to eq(['search'])

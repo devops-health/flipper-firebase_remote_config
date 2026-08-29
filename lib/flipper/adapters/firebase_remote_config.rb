@@ -328,8 +328,13 @@ module Flipper
       # falls back to the JSON blob, which only the backend can interpret.
       def write_gates(template, feature_key, gates)
         if boolean_only?(gates)
+          # Typecast, don't test truthiness: the value is the *string* "true" or
+          # "false", and "false" is truthy in Ruby. Flipper reads this same value
+          # through Typecast.to_boolean, so anything else here means the write
+          # path and Flipper's read path disagree about what is stored.
           write_parameter(template, feature_key,
-                          gates[:boolean] ? 'true' : 'false', type: 'BOOLEAN')
+                          ::Flipper::Typecast.to_boolean(gates[:boolean]) ? 'true' : 'false',
+                          type: 'BOOLEAN')
         else
           warn_client_visibility_loss(template, feature_key)
           write_parameter(template, feature_key,
