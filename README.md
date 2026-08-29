@@ -217,12 +217,36 @@ consequence worth knowing in both directions — **a `BOOLEAN` parameter you
 create directly in the Firebase console is a real Flipper feature**, and so is
 any boolean parameter your app already had.
 
+### One Firebase project per environment
+
+**Staging and production need separate Firebase projects.** Parameter names are
+the feature keys with nothing prepended, so there is no namespace keeping
+environments apart — a flag flipped in staging lands directly on production's
+flags.
+
+This is [Firebase's own recommendation][envs] regardless of this gem: builds
+that differ by release status shouldn't share resources, because debug data
+ends up polluting or overriding production data.
+
+Note what that guidance *doesn't* separate: platform variants of the same app —
+iOS, Android, web — belong together in one project. That's the case this adapter
+is built for. Release status splits projects, not platform.
+
+[envs]: https://firebase.google.com/docs/projects/dev-workflows/general-best-practices#registering-app-variants
+
 ### Multi-tenant setups
 
-**Give each tenant its own Firebase project.** Parameter names are the feature
-keys with nothing prepended, so two tenants sharing one project would overwrite
-each other's flags with no warning. Separate projects also keep tenants from
-sharing a write quota that is only a few hundred publishes per day.
+**Give each tenant its own Firebase project too.** Two tenants sharing one
+project would overwrite each other's flags with no warning, for the same reason
+environments would. Separate projects also keep tenants from sharing a write
+quota that is only a few hundred publishes per day.
+
+Firebase [recommends the same thing][multi-tenancy] for broader reasons — one
+project holding logically independent apps leads to analytics aggregated across
+tenants, shared authentication, and security rules that get hard to reason
+about. Each branded variant of a white-label product gets its own project.
+
+[multi-tenancy]: https://firebase.google.com/docs/projects/dev-workflows/general-best-practices#avoiding-multi-tenancy
 
 ## Reading these flags from a client app
 
