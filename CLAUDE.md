@@ -155,17 +155,20 @@ to extend `default_config` and the (de)serializers together.
 
 ## Running tests
 
-The system Ruby on this machine is 2.6 (below our `>= 2.7` floor). The
-Homebrew Ruby at `/opt/homebrew/opt/ruby@3.4/bin/ruby` is actually a 4.x
-build that satisfies the requirement. Tests:
+The system Ruby is 2.6, below our `>= 2.7` floor. Ruby is managed by **mise**
+here, pinned by `.ruby-version`, so an activated shell has the right one:
 
 ```sh
-/opt/homebrew/opt/ruby@3.4/bin/bundle exec rspec
+bundle exec rspec
 ```
 
-`.claude/settings.json` allowlists the routine `bundle`/`rspec`/`rubocop`
-invocations against that path so future sessions don't pile up permission
-prompts.
+Two traps. A non-interactive shell may not have mise activated and will fall
+through to system Ruby 2.6 — check `ruby -v` before trusting a failure. And if
+`.ruby-version` pins a version mise hasn't installed, mise installs it on first
+use, which looks like a hang for several minutes.
+
+`.claude/settings.json` allowlists the bare `bundle`/`rspec`/`rubocop`/`gem`
+commands — deliberately not absolute paths, which is what went stale last time.
 
 The suite is fully offline — `FakeClient` (in `spec/support/`) stands in for
 the REST client and enforces the same ETag semantics. There are no live HTTP
