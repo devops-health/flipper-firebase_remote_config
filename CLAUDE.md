@@ -87,9 +87,15 @@ client.
 
 There is **no index parameter**. `features` / `get_all` derive the feature list
 from the template itself via `flipper_feature?`: a parameter counts if its
-`valueType` is `BOOLEAN`, or its value parses as our gate hash. The template is
-already fetched in one GET, so scanning its keys costs nothing that reading an
-index parameter out of that same template didn't.
+`valueType` is `BOOLEAN`, or its value parses as a hash carrying **all five**
+gate keys. The template is already fetched in one GET, so scanning its keys
+costs nothing that reading an index parameter out of that same template didn't.
+
+That the JSON test demands the complete set is deliberate, not fussiness. Every
+blob we write starts from `default_config` and so always carries all five, while
+matching on any single key would claim an app's own config — `{"groups": [...]}`
+is an ordinary thing to find in a mobile app's parameters, and `actors` is no
+stranger. Don't loosen it.
 
 Two consequences, both deliberate:
 

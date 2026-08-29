@@ -278,7 +278,12 @@ module Flipper
         end
         return true if [true, false].include?(parsed)
 
-        parsed.is_a?(Hash) && (parsed.keys & GATE_KEYS).any?
+        # Every blob we write starts from default_config, so it always carries
+        # all five keys. Requiring the complete set costs nothing and keeps an
+        # app's own JSON config out — `{"groups": [...]}` is an ordinary thing
+        # to find in a mobile app's parameters, and matching on any single key
+        # would claim it as a feature.
+        parsed.is_a?(Hash) && (GATE_KEYS - parsed.keys).empty?
       end
 
       def ensure_parameter(template, feature_key)

@@ -235,10 +235,26 @@ RSpec.describe Flipper::Adapters::FirebaseRemoteConfig do
     it 'still recognises a JSON gate blob' do
       publish('beta_ui' => {
                 'valueType' => 'JSON',
-                'defaultValue' => { 'value' => JSON.generate('actors' => ['1']) }
+                'defaultValue' => {
+                  'value' => JSON.generate(
+                    'boolean' => nil, 'actors' => ['1'], 'groups' => [],
+                    'percentage_of_actors' => nil, 'percentage_of_time' => nil
+                  )
+                }
               })
 
       expect(adapter.features).to include('beta_ui')
+    end
+
+    it 'ignores app JSON that merely shares a key name with a gate' do
+      publish('audience_config' => {
+                'valueType' => 'JSON',
+                'defaultValue' => {
+                  'value' => JSON.generate('groups' => %w[beta internal])
+                }
+              })
+
+      expect(adapter.features).to be_empty
     end
   end
   describe 'thread safety' do
