@@ -10,19 +10,22 @@ class FakeClient
     @etag     = 'etag-0'
     @counter  = 0
     @publish_calls = 0
+    @mutex = Mutex.new
   end
 
   def fetch_template
-    [deep_dup(@template), @etag]
+    @mutex.synchronize { [deep_dup(@template), @etag] }
   end
 
   def publish_template(template, etag)
-    @publish_calls += 1
-    raise Flipper::Adapters::FirebaseRemoteConfig::ETagMismatch, 'stale' if etag != @etag
+    @mutex.synchronize do
+      @publish_calls += 1
+      raise Flipper::Adapters::FirebaseRemoteConfig::ETagMismatch, 'stale' if etag != @etag
 
-    @template = deep_dup(template)
-    @counter += 1
-    @etag = "etag-#{@counter}"
+      @template = deep_dup(template)
+      @counter += 1
+      @etag = "etag-#{@counter}"
+    end
   end
 
   # Simulate another process publishing in the background between the

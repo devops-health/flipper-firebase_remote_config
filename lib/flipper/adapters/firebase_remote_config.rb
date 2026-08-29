@@ -1,4 +1,5 @@
 require 'json'
+require 'monitor'
 require 'set'
 require 'flipper'
 require 'flipper/adapters/firebase_remote_config/version'
@@ -41,6 +42,8 @@ module Flipper
         @client    = client || Client.new(project_id: project_id, credentials: credentials)
         @cache     = nil
         @cached_at = nil
+        # Reentrant on purpose: with_template's snapshot re-enters load_template.
+        @monitor   = Monitor.new
       end
 
       def features
@@ -101,8 +104,20 @@ module Flipper
       # Drop the in-process cache. Call this when you know the template has
       # drifted (e.g. another process published a new version).
       def reload!
-        @cache = nil
-        @cached_at = nil
+        @monitor.synchronize do
+          @cache = nil
+          @cached_at = nil
+        end
+        self
+      end
+
+      # Install a template that is already known to be current, without paying
+      # for a round-trip. Used by out-of-band change detection.
+      def swap_cache(template, etag)
+        @monitor.synchronize do
+          @cache     = { template: template, etag: etag }
+          @cached_at = Time.now
+        end
         self
       end
 
@@ -156,22 +171,49 @@ module Flipper
         }
       end
 
+      # The returned template is shared between threads and MUST be treated as
+      # read-only. Writers go through checkout_template for a private copy.
+      #
+      # The fetch happens while holding the monitor, so concurrent callers on a
+      # cold cache wait for one GET rather than each issuing their own.
       def load_template
-        return @cache[:template] if @cache && @cached_at && (Time.now - @cached_at) < @cache_ttl
-
-        template, etag = @client.fetch_template
-        @cache     = { template: template, etag: etag }
-        @cached_at = Time.now
-        template
+        @monitor.synchronize do
+          if @cache && @cached_at && (Time.now - @cached_at) < @cache_ttl
+            @cache[:template]
+          else
+            template, etag = @client.fetch_template
+            @cache     = { template: template, etag: etag }
+            @cached_at = Time.now
+            template
+          end
+        end
       end
 
-      # Mutate the cached template in place inside the block, then publish it.
+      # Returns [private_template_copy, etag] captured atomically, so the etag
+      # always belongs to the template it came with.
+      def checkout_template
+        @monitor.synchronize do
+          template = load_template
+          [deep_copy(template), @cache[:etag]]
+        end
+      end
+
+      # The template is the raw API JSON shape, so a JSON round-trip is a
+      # sufficient deep copy and costs us no dependency.
+      def deep_copy(template)
+        JSON.parse(JSON.generate(template))
+      end
+
+      # Mutate a private copy of the template inside the block, then publish it.
       # Retries once on ETag mismatch by reloading and reapplying the block.
+      #
+      # The copy is what makes concurrent reads safe: readers keep seeing the
+      # cached template untouched until the write lands. Two writers racing is
+      # resolved by the ETag, not by a lock, so no lock is held across the PUT.
       def with_template
         attempts = 0
         begin
-          template = load_template
-          etag     = @cache[:etag]
+          template, etag = checkout_template
           yield template
           @client.publish_template(template, etag)
           reload!

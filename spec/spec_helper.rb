@@ -1,6 +1,8 @@
 require 'flipper'
 require 'flipper/adapters/firebase_remote_config'
 require 'support/fake_client'
+require 'support/fake_credentials'
+require 'support/fake_http'
 
 RSpec.configure do |config|
   config.expect_with :rspec do |expectations|

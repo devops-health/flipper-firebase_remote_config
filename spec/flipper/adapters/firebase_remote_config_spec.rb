@@ -162,4 +162,57 @@ RSpec.describe Flipper::Adapters::FirebaseRemoteConfig do
       expect(b.features).to be_empty
     end
   end
+  describe 'thread safety' do
+    let(:adapter) { described_class.new(client: client, cache_ttl: 60) }
+
+    it 'keeps a failed write out of the cache readers see' do
+      feature.enable
+      adapter.features # prime the cache
+
+      allow(client).to receive(:publish_template)
+        .and_raise(Flipper::Adapters::FirebaseRemoteConfig::Error, 'boom')
+
+      expect { flipper[:other].enable }
+        .to raise_error(Flipper::Adapters::FirebaseRemoteConfig::Error)
+      expect(adapter.features).not_to include('other')
+    end
+
+    it 'fetches once when threads race on a cold cache' do
+      expect(client).to receive(:fetch_template).once.and_call_original
+
+      threads = Array.new(8) { Thread.new { adapter.features } }
+      threads.each(&:join)
+    end
+
+    it 'does not lose concurrent writes to different features' do
+      keys = %w[alpha beta gamma delta]
+
+      threads = keys.map do |key|
+        Thread.new do
+          flipper[key].enable
+        rescue Flipper::Adapters::FirebaseRemoteConfig::ETagMismatch
+          retry
+        end
+      end
+      threads.each(&:join)
+
+      adapter.reload!
+      expect(adapter.features).to include(*keys)
+    end
+  end
+
+  describe '#swap_cache' do
+    let(:adapter) { described_class.new(client: client, cache_ttl: 60) }
+
+    it 'installs a template without a round-trip' do
+      feature.enable
+      template, etag = client.fetch_template
+
+      adapter.reload!
+      adapter.swap_cache(template, etag)
+
+      expect(client).not_to receive(:fetch_template)
+      expect(adapter.features).to include('search')
+    end
+  end
 end
