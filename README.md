@@ -46,7 +46,6 @@ Flipper.configure do |config|
     Flipper::Adapters::FirebaseRemoteConfig.new(
       project_id:  ENV.fetch('FIREBASE_PROJECT_ID'),
       credentials: ENV.fetch('GOOGLE_APPLICATION_CREDENTIALS'), # path to service-account JSON
-      prefix:      'flipper__',  # optional, default 'flipper__'
       cache_ttl:   30,           # optional, default 30 seconds; use 0 behind a cache store
     )
   end
@@ -188,13 +187,23 @@ writing through this adapter — until the relevant layer expires on its own.
 
 ## Storage layout
 
-Each Flipper feature becomes one Remote Config parameter, named
-`<prefix><feature_key>`. The parameter's `defaultValue.value` is a JSON blob
-representing the gate state:
+Each Flipper feature is one Remote Config parameter, **named for the feature key
+exactly** — the feature `:search` is the parameter `search`. There is no prefix
+and no bookkeeping parameter, because your client apps read these names too.
+
+A feature whose only gate is on/off is stored as a real `BOOLEAN` parameter:
+
+```
+search   BOOLEAN   true
+```
+
+A feature using actor, group or percentage gates falls back to a JSON blob of
+the gate state, since those gates are evaluated per-actor by the backend and
+have no meaning to a client:
 
 ```json
 {
-  "boolean": "true",
+  "boolean": null,
   "actors": ["1", "2"],
   "groups": ["admins"],
   "percentage_of_actors": "25",
@@ -202,54 +211,52 @@ representing the gate state:
 }
 ```
 
-A sentinel parameter `<prefix>__index__` holds a JSON array of all known
-feature keys, so listing features doesn't have to scan every parameter.
+The adapter recognises which parameters are features by their type: a parameter
+counts if it's `BOOLEAN`, or if its value parses as the gate shape above. One
+consequence worth knowing in both directions — **a `BOOLEAN` parameter you
+create directly in the Firebase console is a real Flipper feature**, and so is
+any boolean parameter your app already had.
 
 ## Reading these flags from a client app
 
-This is the point of the gem — the same parameter, flipped in one place, read by
-both the backend and your Firebase-using apps — but **it does not work out of the
-box today**, and it's worth being clear about why before you build on it.
-
-A client SDK reading `flipper__search` gets the raw JSON string shown above, not
-a boolean. `getBoolean()` on it returns `false`. Clients have to parse the gate
-blob themselves:
+This is the point of the gem: the same parameter, flipped in one place, read by
+both the backend and your Firebase-using apps. For simple on/off features it
+just works, with no knowledge of this gem on the client side:
 
 ```swift
 // Swift — Firebase iOS SDK
-let raw = RemoteConfig.remoteConfig()["flipper__search"].stringValue
-let gates = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any]
-let enabled = (gates?["boolean"] as? String) == "true"
+let enabled = RemoteConfig.remoteConfig()["search"].boolValue
 ```
 
 ```kotlin
 // Kotlin — Firebase Android SDK
-val raw = Firebase.remoteConfig.getString("flipper__search")
-val enabled = JSONObject(raw).optString("boolean") == "true"
+val enabled = Firebase.remoteConfig.getBoolean("search")
 ```
 
 ```js
 // JavaScript — Firebase Web SDK
-const raw = getValue(remoteConfig, 'flipper__search').asString();
-const enabled = JSON.parse(raw).boolean === 'true';
+const enabled = getValue(remoteConfig, 'search').asBoolean();
 ```
 
-Two limits follow from this, and they matter more than the parsing:
+### The one rule: client-visible features stay boolean-only
 
-- **Only the `boolean` gate has any client-side meaning.** Actor, group and
-  percentage gates are evaluated per-actor by the Ruby backend; a client has no
-  actor to evaluate them against. A client reading a feature that is enabled for
-  25% of actors sees `"boolean": null` and should treat the feature as off.
-- **So features you intend clients to read should be flipped with plain
-  `Flipper.enable(:search)` / `Flipper.disable(:search)`** — not with actor or
-  percentage gates. Coordinating a *release* across backend and app works today;
-  coordinating a gradual *ramp* does not.
+Actor, group and percentage gates are evaluated per-actor by the Ruby backend.
+A client has no actor to evaluate them against, so a feature using them is
+stored as JSON instead — and **`getBoolean()` on a JSON value returns `false`
+rather than raising.**
 
-Ignore the `flipper____index__` parameter — it's bookkeeping for the adapter.
+That means a feature which starts as a plain boolean and later gains an actor
+or percentage gate **silently switches off for every client**, mid-rollout, with
+no error anywhere. The adapter warns on stderr when a write causes that
+transition, but nothing can stop it.
 
-A client-native value format (writing simple boolean features as a real
-`BOOLEAN` parameter, so `getBoolean()` just works) and percentage rollouts
-authored as real Remote Config conditions are both planned; neither has landed.
+So: features your apps read should be flipped with plain `Flipper.enable(:search)`
+and `Flipper.disable(:search)`. Keep actor and percentage gates for backend-only
+features.
+
+Coordinating a *release* across backend and app works today. Coordinating a
+gradual *ramp* does not — the backend buckets actors in Ruby, and a client SDK
+would have to bucket itself independently, with no guarantee the two agree.
 
 ## Concurrency and retries
 
