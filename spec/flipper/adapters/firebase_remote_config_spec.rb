@@ -153,13 +153,92 @@ RSpec.describe Flipper::Adapters::FirebaseRemoteConfig do
     end
   end
 
-  describe 'prefix isolation' do
-    it 'two adapters with different prefixes do not see each other' do
-      a = described_class.new(client: client, prefix: 'app_a__', cache_ttl: 0)
-      b = described_class.new(client: client, prefix: 'app_b__', cache_ttl: 0)
-      Flipper.new(a).enable(:search)
-      expect(a.features).to include('search')
-      expect(b.features).to be_empty
+  describe 'parameter naming and value format' do
+    def template
+      client.fetch_template.first
+    end
+
+    it 'names the parameter for the feature key, with no prefix' do
+      feature.enable
+      expect(template['parameters'].keys).to eq(['search'])
+    end
+
+    it 'writes no index parameter' do
+      feature.enable
+      expect(template['parameters'].keys).to all(satisfy { |k| !k.include?('index') })
+    end
+
+    it 'stores a simple on/off feature as a real BOOLEAN parameter' do
+      feature.enable
+      param = template['parameters']['search']
+      expect(param['valueType']).to eq('BOOLEAN')
+      expect(param.dig('defaultValue', 'value')).to eq('true')
+    end
+
+    it 'stores a disabled feature as BOOLEAN false' do
+      feature.enable
+      feature.disable
+      param = template['parameters']['search']
+      expect(param['valueType']).to eq('BOOLEAN')
+      expect(param.dig('defaultValue', 'value')).to eq('false')
+    end
+
+    it 'round-trips a disabled feature back to the default config' do
+      feature.enable
+      feature.disable
+      expect(adapter.get(feature)).to eq(
+        boolean: nil, actors: Set.new, groups: Set.new,
+        percentage_of_actors: nil, percentage_of_time: nil
+      )
+    end
+
+    it 'falls back to JSON once a feature uses a gate clients cannot evaluate' do
+      feature.enable_actor(Flipper::Actor.new('1'))
+      param = template['parameters']['search']
+      expect(param['valueType']).to eq('JSON')
+      expect(JSON.parse(param.dig('defaultValue', 'value'))['actors']).to eq(['1'])
+    end
+
+    it 'warns when a feature stops being readable by clients' do
+      feature.enable
+      expect { feature.enable_actor(Flipper::Actor.new('1')) }
+        .to output(/no longer a plain boolean/).to_stderr
+    end
+  end
+
+  describe 'recognising which parameters are features' do
+    def publish(parameters)
+      template, etag = client.fetch_template
+      template['parameters'] = parameters
+      client.publish_template(template, etag)
+    end
+
+    it 'treats a BOOLEAN parameter created outside the adapter as a feature' do
+      publish('created_in_console' => {
+                'valueType' => 'BOOLEAN',
+                'defaultValue' => { 'value' => 'true' }
+              })
+
+      expect(adapter.features).to include('created_in_console')
+      expect(flipper[:created_in_console]).to be_enabled
+    end
+
+    it 'ignores the app own non-boolean parameters' do
+      publish('welcome_message' => {
+                'valueType' => 'STRING',
+                'defaultValue' => { 'value' => 'Hello' }
+              })
+
+      expect(adapter.features).to be_empty
+    end
+
+    it 'still recognises a JSON gate blob' do
+      publish('beta_ui' => {
+                'valueType' => 'JSON',
+                'defaultValue' => { 'value' => JSON.generate('actors' => ['1']) }
+              })
+
+      expect(adapter.features).to include('beta_ui')
     end
   end
   describe 'thread safety' do

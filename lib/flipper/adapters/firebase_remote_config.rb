@@ -8,18 +8,25 @@ require 'flipper/adapters/firebase_remote_config/client'
 module Flipper
   module Adapters
     # Flipper adapter that stores feature state as Firebase Remote Config
-    # parameters. One parameter per feature; an index parameter tracks the
-    # known feature keys so listing doesn't have to scan the whole template.
+    # parameters. One parameter per feature, named for the feature key exactly,
+    # because client apps read these names too.
+    #
+    # A simple on/off feature is a real BOOLEAN parameter, so a Firebase client
+    # can call getBoolean() on it. A feature using actor, group or percentage
+    # gates falls back to a JSON blob only the backend can interpret.
     #
     # The in-memory representation of a template is the raw API JSON shape:
     #
     #   {
     #     "parameters" => {
-    #       "flipper__search" => {
-    #         "valueType" => "JSON",
-    #         "defaultValue" => { "value" => "{\"boolean\":\"true\",...}" }
+    #       "search" => {
+    #         "valueType" => "BOOLEAN",
+    #         "defaultValue" => { "value" => "true" }
     #       },
-    #       "flipper____index__" => { ... JSON array of feature keys ... }
+    #       "beta_ui" => {
+    #         "valueType" => "JSON",
+    #         "defaultValue" => { "value" => "{\"actors\":[\"1\"],...}" }
+    #       }
     #     },
     #     "conditions" => [...],
     #     ...
@@ -28,16 +35,22 @@ module Flipper
     # See README.md for the rationale and for caveats (eventual consistency,
     # write quotas, no support for Remote Config conditions in v0.1).
     class FirebaseRemoteConfig
-      DEFAULT_PREFIX     = 'flipper__'.freeze
-      INDEX_SUFFIX       = '__index__'.freeze
-      DEFAULT_CACHE_TTL  = 30 # seconds
+      DEFAULT_CACHE_TTL = 30 # seconds
+
+      # The gate keys we persist. Also how we recognise one of our parameters
+      # among the app's own — see #flipper_feature?.
+      GATE_KEYS = %w[
+        boolean actors groups percentage_of_actors percentage_of_time
+      ].freeze
+
+      # Strings Firebase treats as a true BOOLEAN parameter value.
+      TRUTHY = %w[true 1 t yes y on].freeze
 
       attr_reader :name
 
       def initialize(project_id: nil, credentials: nil, client: nil,
-                     prefix: DEFAULT_PREFIX, cache_ttl: DEFAULT_CACHE_TTL)
+                     cache_ttl: DEFAULT_CACHE_TTL)
         @name      = :firebase_remote_config
-        @prefix    = prefix
         @cache_ttl = cache_ttl
         @client    = client || Client.new(project_id: project_id, credentials: credentials)
         @cache     = nil
@@ -47,22 +60,16 @@ module Flipper
       end
 
       def features
-        Set.new(index_from(load_template))
+        Set.new(feature_keys(load_template))
       end
 
       def add(feature)
-        with_template do |template|
-          ensure_parameter(template, feature.key)
-          add_to_index(template, feature.key)
-        end
+        with_template { |template| ensure_parameter(template, feature.key) }
         true
       end
 
       def remove(feature)
-        with_template do |template|
-          template['parameters']&.delete(parameter_name(feature.key))
-          remove_from_index(template, feature.key)
-        end
+        with_template { |template| template['parameters']&.delete(feature.key) }
         true
       end
 
@@ -86,7 +93,7 @@ module Flipper
 
       def get_all
         template = load_template
-        index_from(template).to_h do |feature_key|
+        feature_keys(template).to_h do |feature_key|
           [feature_key, read_gates(template, feature_key)]
         end
       end
@@ -127,7 +134,6 @@ module Flipper
         with_template do |template|
           gates = yield(read_gates(template, feature.key))
           write_gates(template, feature.key, gates)
-          add_to_index(template, feature.key)
         end
       end
 
@@ -227,64 +233,112 @@ module Flipper
         end
       end
 
-      def parameter_name(feature_key)
-        "#{@prefix}#{feature_key}"
+      # A feature is a parameter we recognise as ours. There is no prefix and no
+      # index sentinel: parameter names are the feature keys verbatim, because
+      # client apps read these names and `flipper__search` leaked an
+      # implementation detail into an interface they see.
+      #
+      # The trade: an app's own BOOLEAN parameter shows up as a feature. For an
+      # adapter whose whole point is that both sides read the same parameters,
+      # that is closer to right than wrong — and it means a flag created in the
+      # Firebase console is a real feature here, which the index made impossible.
+      def feature_keys(template)
+        (template['parameters'] || {}).each_with_object([]) do |(key, param), acc|
+          acc << key if flipper_feature?(param)
+        end.sort
       end
 
-      def index_parameter_name
-        "#{@prefix}#{INDEX_SUFFIX}"
-      end
+      def flipper_feature?(param)
+        return true if param['valueType'] == 'BOOLEAN'
 
-      def index_from(template)
-        raw = parameter_value(template, index_parameter_name)
-        return [] if raw.nil?
+        raw = param.dig('defaultValue', 'value')
+        return false if raw.nil?
 
-        JSON.parse(raw)
-      rescue JSON::ParserError
-        []
-      end
+        parsed = begin
+          JSON.parse(raw)
+        rescue JSON::ParserError
+          nil
+        end
+        return true if [true, false].include?(parsed)
 
-      def add_to_index(template, feature_key)
-        keys = (index_from(template) + [feature_key]).uniq.sort
-        write_parameter(template, index_parameter_name, JSON.generate(keys))
-      end
-
-      def remove_from_index(template, feature_key)
-        keys = index_from(template) - [feature_key]
-        write_parameter(template, index_parameter_name, JSON.generate(keys))
+        parsed.is_a?(Hash) && (parsed.keys & GATE_KEYS).any?
       end
 
       def ensure_parameter(template, feature_key)
-        return if (template['parameters'] || {}).key?(parameter_name(feature_key))
+        return if (template['parameters'] || {}).key?(feature_key)
 
         write_gates(template, feature_key, default_config)
       end
 
       def read_gates(template, feature_key)
-        raw_json = parameter_value(template, parameter_name(feature_key))
-        return default_config if raw_json.nil?
+        param = (template['parameters'] || {})[feature_key]
+        raw   = param&.dig('defaultValue', 'value')
+        return default_config if raw.nil?
 
-        raw = JSON.parse(raw_json, symbolize_names: true)
-        deserialize_gates(raw)
+        # A BOOLEAN parameter may have been typed by hand in the console, so
+        # accept everything Firebase accepts rather than only "true"/"false".
+        return boolean_gates(raw) if param['valueType'] == 'BOOLEAN'
+
+        parse_gates(raw)
+      end
+
+      def parse_gates(raw)
+        case (parsed = JSON.parse(raw, symbolize_names: true))
+        when Hash        then deserialize_gates(parsed)
+        when true, false then boolean_gates(parsed.to_s)
+        else default_config
+        end
       rescue JSON::ParserError
         default_config
       end
 
+      # `false` round-trips to boolean: nil, not "false" — #disable writes an
+      # all-nil config, and Flipper's shared adapter spec compares #get against
+      # default_config exactly.
+      def boolean_gates(raw)
+        return default_config unless TRUTHY.include?(raw.to_s.downcase)
+
+        default_config.merge(boolean: 'true')
+      end
+
+      # Simple features become real BOOLEAN parameters so a client can call
+      # getBoolean() on them. Anything using actor, group or percentage gates
+      # falls back to the JSON blob, which only the backend can interpret.
       def write_gates(template, feature_key, gates)
-        write_parameter(template, parameter_name(feature_key),
-                        JSON.generate(serialize_gates(gates)))
+        if boolean_only?(gates)
+          write_parameter(template, feature_key,
+                          gates[:boolean] ? 'true' : 'false', type: 'BOOLEAN')
+        else
+          warn_client_visibility_loss(template, feature_key)
+          write_parameter(template, feature_key,
+                          JSON.generate(serialize_gates(gates)), type: 'JSON')
+        end
       end
 
-      def parameter_value(template, name)
-        param = (template['parameters'] || {})[name]
-        param&.dig('defaultValue', 'value')
+      def boolean_only?(gates)
+        Array(gates[:actors]).empty? &&
+          Array(gates[:groups]).empty? &&
+          gates[:percentage_of_actors].nil? &&
+          gates[:percentage_of_time].nil?
       end
 
-      def write_parameter(template, name, json_value)
+      # getBoolean() on a JSON blob returns false rather than erroring, so a
+      # feature that gains an actor gate silently switches off for every client.
+      # At least make the moment it happens visible.
+      def warn_client_visibility_loss(template, feature_key)
+        param = (template['parameters'] || {})[feature_key]
+        return unless param && param['valueType'] == 'BOOLEAN'
+
+        warn "flipper-firebase_remote_config: feature #{feature_key.inspect} is no " \
+             'longer a plain boolean, so Firebase clients reading it will now see ' \
+             'false. Keep client-visible features boolean-only.'
+      end
+
+      def write_parameter(template, name, value, type: 'JSON')
         template['parameters'] ||= {}
         template['parameters'][name] = {
-          'valueType' => 'JSON',
-          'defaultValue' => { 'value' => json_value }
+          'valueType' => type,
+          'defaultValue' => { 'value' => value }
         }
       end
 
