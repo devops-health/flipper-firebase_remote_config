@@ -9,6 +9,39 @@ A Flipper adapter that persists feature flag state as Firebase Remote Config
 parameters. The user-facing surface is documented in `README.md` — this file
 covers the *why* of the design and the gotchas a maintainer needs to know.
 
+## The positioning, and why it constrains the design
+
+> One source of truth for teams that already ship a Firebase mobile client.
+> Backend and app read the same parameters, flipped in one place.
+
+Read that as a design constraint, not marketing. It is the reason to choose this
+gem over `flipper-redis` or `flipper-active_record`, both of which are better at
+everything except being readable by a mobile app.
+
+Two consequences a maintainer needs to hold onto:
+
+- **The stored value format is a public interface.** It is not an internal
+  encoding you can restructure freely — client apps read these parameters. See
+  "Storage scheme" below.
+- **We write the *client* template.** Verified: `/v1/projects/{p}/remoteConfig`
+  is byte-identical to `/v1/projects/{p}/namespaces/firebase/remoteConfig` —
+  same ETag, same parameters, same version. The project-level path *is* the
+  client namespace. There is also a `firebase-server` namespace which is
+  readable and writable the same way, but **server templates are served only to
+  Admin SDK implementations** — client SDKs cannot see them. Moving storage
+  there would make the flags invisible to the apps this gem exists to
+  coordinate with. Don't, unless a deployment explicitly doesn't need client
+  visibility.
+
+Where the positioning does *not* hold yet, and the work tracked against it:
+
+- A client SDK reading a parameter gets the gate JSON blob, and `getBoolean()`
+  on it returns `false`. Clients must parse the blob by hand today.
+- Only the `boolean` gate has client-side meaning; actor, group and percentage
+  gates are evaluated per-actor in Ruby and a client has no actor.
+- So coordinating a *release* across backend and app works; coordinating a
+  gradual *ramp* does not.
+
 ## Architecture in one diagram
 
 ```
@@ -22,6 +55,14 @@ Flipper::Feature ──► Flipper::Adapters::FirebaseRemoteConfig (this gem)
                                              GET  /v1/projects/{id}/remoteConfig
                                              PUT  /v1/projects/{id}/remoteConfig
                                                   (with If-Match: <etag>)
+                                                        ▲
+                                                        │ the same parameters,
+                                                        │ fetched natively
+                                                        │
+                              Firebase client SDKs ─────┘
+                              (iOS / Android / Web — the second reader,
+                               and the reason the value format is a
+                               public interface)
 ```
 
 The whole adapter is just two files of substance:
@@ -40,6 +81,16 @@ the project.
 
 The in-memory template is a plain `Hash` matching the API JSON shape — not a
 typed model object. See "Why no generated client" below.
+
+**The `defaultValue.value` encoding is client-visible.** Mobile and web clients
+fetch these same parameters, so the JSON blob is not free to restructure — a
+change here breaks every app parsing it. This is also the main thing standing
+between the gem and its own positioning: `getBoolean()` on a gate blob returns
+`false`, so clients can't consume it natively. Writing simple boolean features
+as a real `BOOLEAN` parameter (falling back to the blob only when a feature uses
+actor/group/percentage gates) is the planned fix. Note the sharp edge that
+design carries: a feature that starts boolean-only and later gains an actor gate
+silently flips **off** for every client, because `getBoolean()` fails soft.
 
 ## Why no generated Google API client
 
@@ -129,9 +180,19 @@ yet.
 - **Don't change the parameter name format** without a migration path —
   existing deployments have parameters named `flipper__foo` and the index at
   `flipper____index__`. Renaming silently orphans flags.
-- **Don't expose Remote Config conditions through the standard gate API.** If
-  you want conditions, add a new extension method (e.g.
-  `#enable_for_condition`) rather than overloading the gate semantics.
+- **Don't expose Remote Config conditions as a new user-facing concept.** An
+  `#enable_for_condition` that lets callers write arbitrary conditions is still
+  the wrong idea — it becomes a second, competing way to express a flag.
+
+  This rule has a deliberate exception under discussion: making
+  `Flipper.enable(:f, percentage_of_actors: 25)` author a real Remote Config
+  condition, so clients can evaluate the ramp natively. That is a condition as
+  the *implementation* of an existing gate, with the Flipper API unchanged —
+  not a new concept. Note that Firebase's built-in `percent` operator can't be
+  used for it: client templates are evaluated by Google's backend at fetch time,
+  against an identifier the server can't see, so the two sides can never agree.
+  The workable scheme buckets on a custom signal both sides derive from the same
+  user id.
 - **Don't introduce a hard dependency on a specific Flipper version >= 1.x
   point release** without checking that the gate `data_type` enum is still
   what the case-statement in `#enable` / `#disable` expects.
