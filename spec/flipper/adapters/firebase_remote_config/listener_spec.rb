@@ -176,5 +176,46 @@ RSpec.describe Flipper::Adapters::FirebaseRemoteConfig::Listener do
     it 'stop is safe to call without start' do
       expect { listener.stop }.not_to raise_error
     end
+
+    it 'does not spawn a second poller when a tick outlives stop' do
+      stub_const("#{described_class}::STOP_JOIN_TIMEOUT", 0.05)
+      release = Queue.new
+      allow(adapter).to receive(:refresh!) { release.pop }
+
+      listener.start
+      sleep 0.05 until listener.instance_variable_get(:@ticking).locked?
+
+      expect { listener.stop }.to output(/still running/).to_stderr
+
+      threads_before = Thread.list.size
+      listener.start
+      expect(Thread.list.size).to eq(threads_before)
+
+      release << { 'parameters' => {} } # let the wedged tick finish
+    end
+  end
+
+  describe 'concurrent ticks' do
+    # Deliberately holds the first tick inside refresh! so the others have to
+    # overlap it. Without the lock they all sail past the version check together
+    # and four fetches land; simply racing four threads isn't enough to prove
+    # anything, because the first one usually finishes before the rest look.
+    it 'serializes so a caller never sees a version from one fetch and a template from another' do
+      entered = Queue.new
+      release = Queue.new
+      allow(adapter).to receive(:refresh!) do
+        entered << :in
+        release.pop
+        { 'parameters' => {} }
+      end
+
+      threads = Array.new(4) { Thread.new { listener.tick } }
+      sleep 0.1 # let every thread reach either refresh! or the lock
+
+      expect(entered.size).to eq(1)
+
+      4.times { release << :go }
+      threads.each(&:join)
+    end
   end
 end

@@ -31,6 +31,10 @@ module Flipper
         DEFAULT_INTERVAL = 10
         MINIMUM_INTERVAL = 1
         MAXIMUM_BACKOFF  = 300
+        # How long #stop waits for the thread to finish its current tick. A tick
+        # can legitimately take ~20s (the client's open + read timeouts), so this
+        # expiring doesn't mean the thread is wedged.
+        STOP_JOIN_TIMEOUT = 5
         # Fraction of the interval to jitter by, so N processes don't all wake
         # on the same second and stampede the API.
         JITTER = 0.3
@@ -51,6 +55,9 @@ module Flipper
 
           @monitor  = Monitor.new
           @wake     = @monitor.new_cond
+          # Separate from @monitor on purpose: a tick holds this across network
+          # I/O, and #stop must not queue behind it.
+          @ticking  = Mutex.new
           @running  = false
           @thread   = nil
           @pid      = nil
@@ -85,8 +92,16 @@ module Flipper
             @wake.broadcast
             @thread
           end
-          thread&.join(5)
-          @monitor.synchronize { @thread = nil }
+          thread&.join(STOP_JOIN_TIMEOUT)
+
+          # Only forget the thread once it's actually gone. Clearing it while it
+          # still runs would make #alive? false, and the next #start would spawn
+          # a second poller alongside the first.
+          if thread&.alive?
+            report(RuntimeError.new("listener thread still running after #{STOP_JOIN_TIMEOUT}s"))
+          else
+            @monitor.synchronize { @thread = nil }
+          end
           self
         end
 
@@ -95,20 +110,27 @@ module Flipper
         end
 
         # One poll, run inline. Public so specs can drive the loop without
-        # waiting on wall-clock time.
+        # waiting on wall-clock time, and so a caller can force one by hand.
+        #
+        # Serialized on its own lock, not @monitor: a tick holds it across
+        # network I/O, and #stop must stay prompt. Racing the poll thread means
+        # waiting rather than interleaving with it, which would otherwise leave
+        # a version from one fetch beside a template from another.
         #
         # Returns true if the template was refreshed, false if the version was
         # unchanged and nothing was done.
         def tick
-          version = current_version
-          return false if version && version == @last_version
+          @ticking.synchronize do
+            version = current_version
+            next false if version && version == @last_version
 
-          template = @adapter.refresh!
-          changed  = @last_template ? changed_keys(@last_template, template) : []
-          @last_version  = version
-          @last_template = template
-          notify(changed) if changed.any?
-          true
+            template = @adapter.refresh!
+            changed  = @last_template ? changed_keys(@last_template, template) : []
+            @last_version  = version
+            @last_template = template
+            notify(changed) if changed.any?
+            true
+          end
         end
 
         private
@@ -129,9 +151,13 @@ module Flipper
           end
         end
 
+        # Same critical section as #tick — it touches the same state, and a
+        # caller can hand-drive #tick before start's baseline has finished.
         def prime
-          @last_version  = current_version
-          @last_template = @adapter.refresh!
+          @ticking.synchronize do
+            @last_version  = current_version
+            @last_template = @adapter.refresh!
+          end
         end
 
         # An exception must never kill the thread — a Remote Config blip would
