@@ -43,6 +43,21 @@ module Flipper
           [JSON.parse(response.body), response['ETag']]
         end
 
+        # The version number of the most recently published template, or nil if
+        # the project has never published one.
+        #
+        # This is the cheap change probe: it returns one version's metadata
+        # rather than the whole template, so a background poller can call it
+        # often. Note that `If-None-Match` is *not* honoured on the template GET
+        # — that was tested against a live project and always returns 200 with a
+        # full body — so there is no 304 shortcut to use instead.
+        def latest_version
+          response = request(:get, "#{template_path}:listVersions?pageSize=1")
+          ensure_success!(response)
+          version = (JSON.parse(response.body)['versions'] || []).first
+          version && version['versionNumber'].to_i
+        end
+
         # Publishes a modified template. Raises ETagMismatch on 409/412 so the
         # adapter can reload and retry; raises Error on any other failure.
         def publish_template(template, etag)

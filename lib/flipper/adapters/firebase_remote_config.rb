@@ -4,6 +4,7 @@ require 'set'
 require 'flipper'
 require 'flipper/adapters/firebase_remote_config/version'
 require 'flipper/adapters/firebase_remote_config/client'
+require 'flipper/adapters/firebase_remote_config/listener'
 
 module Flipper
   module Adapters
@@ -116,6 +117,28 @@ module Flipper
           @cached_at = nil
         end
         self
+      end
+
+      # The version number of the latest published template, or nil. Cheap
+      # enough to poll — it doesn't pull the template.
+      def latest_version
+        @client.latest_version
+      end
+
+      # Fetch the current template, install it, and return it. This is what a
+      # Listener calls once its probe says the version moved.
+      def refresh!
+        template, etag = @client.fetch_template
+        swap_cache(template, etag)
+        template
+      end
+
+      # Which parameters in a template are features of ours. Public because a
+      # Listener needs it to diff two templates without duplicating the rule.
+      def feature_keys(template)
+        (template['parameters'] || {}).each_with_object([]) do |(key, param), acc|
+          acc << key if flipper_feature?(param)
+        end.sort
       end
 
       # Install a template that is already known to be current, without paying
@@ -242,12 +265,6 @@ module Flipper
       # adapter whose whole point is that both sides read the same parameters,
       # that is closer to right than wrong — and it means a flag created in the
       # Firebase console is a real feature here, which the index made impossible.
-      def feature_keys(template)
-        (template['parameters'] || {}).each_with_object([]) do |(key, param), acc|
-          acc << key if flipper_feature?(param)
-        end.sort
-      end
-
       def flipper_feature?(param)
         return true if param['valueType'] == 'BOOLEAN'
 

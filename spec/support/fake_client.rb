@@ -28,6 +28,11 @@ class FakeClient
     end
   end
 
+  # Mirrors listVersions: the version number rises with every publish.
+  def latest_version
+    @mutex.synchronize { @counter }
+  end
+
   # Simulate another process publishing in the background between the
   # adapter's fetch and write.
   def bump_etag!

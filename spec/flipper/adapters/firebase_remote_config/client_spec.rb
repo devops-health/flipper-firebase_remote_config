@@ -58,4 +58,31 @@ RSpec.describe Flipper::Adapters::FirebaseRemoteConfig::Client do
       expect(creds.fetch_count).to eq(1)
     end
   end
+  describe '#latest_version' do
+    let(:credentials) { FakeCredentials.new(access_token: 'live') }
+
+    def client_for(body)
+      described_class.new(
+        project_id: 'proj',
+        credentials: credentials,
+        http: FakeHttp.new(FakeResponse.new(code: 200, body: body))
+      )
+    end
+
+    it 'returns the latest published version number' do
+      client = client_for(JSON.generate('versions' => [{ 'versionNumber' => '7' }]))
+      expect(client.latest_version).to eq(7)
+    end
+
+    it 'asks listVersions for a single version rather than the template' do
+      client = client_for(JSON.generate('versions' => []))
+      client.latest_version
+      path = client.instance_variable_get(:@http).requests.last.path
+      expect(path).to end_with('/remoteConfig:listVersions?pageSize=1')
+    end
+
+    it 'returns nil when the project has never published a template' do
+      expect(client_for('{}').latest_version).to be_nil
+    end
+  end
 end
