@@ -35,12 +35,15 @@ Two consequences a maintainer needs to hold onto:
 
 Where the positioning does *not* hold yet, and the work tracked against it:
 
-- A client SDK reading a parameter gets the gate JSON blob, and `getBoolean()`
-  on it returns `false`. Clients must parse the blob by hand today.
 - Only the `boolean` gate has client-side meaning; actor, group and percentage
-  gates are evaluated per-actor in Ruby and a client has no actor.
+  gates are evaluated per-actor in Ruby and a client has no actor. Those
+  features fall back to a JSON blob, and `getBoolean()` on a blob returns
+  `false` rather than erroring — so a feature that starts boolean-only and later
+  gains an actor gate silently switches **off** for every client. `write_gates`
+  warns on that transition; the rule is that client-visible features stay
+  boolean-only.
 - So coordinating a *release* across backend and app works; coordinating a
-  gradual *ramp* does not.
+  gradual *ramp* does not. See test-tracker#470.
 
 ## Architecture in one diagram
 
@@ -73,11 +76,29 @@ The whole adapter is just two files of substance:
 
 ## Storage scheme
 
-One Remote Config parameter per feature, named `<prefix><feature_key>` (prefix
-defaults to `flipper__`). The parameter's `defaultValue.value` holds a JSON
-blob with the gate state. A sentinel parameter `<prefix>__index__` lists known
-feature keys so `features` / `get_all` don't have to scan every parameter in
-the project.
+One Remote Config parameter per feature, named for the feature key **verbatim**
+— no prefix. Client apps read these names.
+
+A feature whose only gate is boolean is stored as a real `BOOLEAN` parameter
+(`"true"` / `"false"`), so a Firebase client can call `getBoolean()` on it. A
+feature using actor, group or percentage gates falls back to a JSON blob of the
+gate state, because those are evaluated per-actor in Ruby and mean nothing to a
+client.
+
+There is **no index parameter**. `features` / `get_all` derive the feature list
+from the template itself via `flipper_feature?`: a parameter counts if its
+`valueType` is `BOOLEAN`, or its value parses as our gate hash. The template is
+already fetched in one GET, so scanning its keys costs nothing that reading an
+index parameter out of that same template didn't.
+
+Two consequences, both deliberate:
+
+- A `BOOLEAN` parameter created directly in the Firebase console **is** a
+  feature here. The old index made that impossible — the console could edit a
+  flag but never create one, which contradicted the positioning above.
+- An app's own `BOOLEAN` parameter also shows up as a feature. For an adapter
+  whose point is that both sides read the same parameters, that is closer to
+  right than wrong.
 
 The in-memory template is a plain `Hash` matching the API JSON shape — not a
 typed model object. See "Why no generated client" below.
@@ -153,6 +174,12 @@ gate keys we persist match Flipper's default config — `boolean`, `actors`,
 (`:expression`) are not handled; if Flipper adds new built-in gates we'll need
 to extend `default_config` and the (de)serializers together.
 
+These only cover the JSON fallback form; boolean-only features go through
+`boolean_gates` instead. Watch that round-trip: an empty gate set serialises to
+`BOOLEAN` `false` and must read back as `boolean: nil`, **not** `"false"`.
+`#disable` writes an all-nil config, and Flipper's shared adapter spec compares
+`#get` against `default_config` exactly.
+
 ## Running tests
 
 The system Ruby is 2.6, below our `>= 2.7` floor. Ruby is managed by **mise**
@@ -184,16 +211,14 @@ yet.
   read these parameters by name, so a rename is a breaking change for every app,
   not an internal refactor.
 
-  The `flipper__` prefix and the `<prefix>__index__` sentinel are both on their
-  way out: they leak an implementation detail into names the apps see, and the
-  index is a second source of truth that stops the Firebase console from being
-  able to *create* a flag — only edit one — which contradicts the positioning
-  above. The target is the feature key verbatim, with `valueType` distinguishing
-  a Flipper feature from the app's own parameters.
+  The `flipper__` prefix and the `<prefix>__index__` sentinel are **gone**. Both
+  answered the same question — which parameters are ours — and both leaked into
+  the console; `valueType` answers it now without appearing in a name. Don't
+  reintroduce either.
 
-  There are no real deployments yet, so this rename is free **now**. Once apps
-  ship against these names it stops being free, and this rule reverts to its
-  original meaning: don't rename without a migration path.
+  Renaming was free while no apps shipped against these names. That window is
+  closing: once one does, this rule reverts to its original meaning — don't
+  rename without a migration path.
 - **Don't expose Remote Config conditions as a new user-facing concept.** An
   `#enable_for_condition` that lets callers write arbitrary conditions is still
   the wrong idea — it becomes a second, competing way to express a flag.
