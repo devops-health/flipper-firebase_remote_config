@@ -82,7 +82,14 @@ module Flipper
 
         def start
           @monitor.synchronize do
-            return self if alive?
+            # A stop whose join timed out leaves the thread running with
+            # @running false. Re-arm instead of no-opping: the outgoing thread
+            # sees it true at its next check and keeps polling, and we still
+            # don't spawn a second one.
+            if alive?
+              @running = true
+              return self
+            end
 
             @running = true
             @pid     = Process.pid
@@ -164,8 +171,13 @@ module Flipper
         # caller can hand-drive #tick before start's baseline has finished.
         def prime
           @ticking.synchronize do
-            @last_version  = current_version
+            # Template first. Assigning the version before the fetch leaves the
+            # two out of step if refresh! raises — version recorded, template
+            # nil — and the listener then absorbs the next real publish as its
+            # baseline instead of reporting it.
+            version = current_version
             @last_template = @adapter.refresh!
+            @last_version  = version
           end
         end
 

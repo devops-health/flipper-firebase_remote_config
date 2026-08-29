@@ -228,6 +228,70 @@ RSpec.describe Flipper::Adapters::FirebaseRemoteConfig do
     end
   end
 
+  describe 'parameters the adapter does not own' do
+    def console_parameter
+      external, etag = client.fetch_template
+      external['parameters']['search'] = {
+        'valueType' => 'BOOLEAN',
+        'description' => 'owned by the mobile team',
+        'defaultValue' => { 'value' => 'false' },
+        'conditionalValues' => { 'ios_beta' => { 'value' => 'true' } }
+      }
+      client.publish_template(external, etag)
+      adapter.reload!
+    end
+
+    it 'keeps description and conditionalValues when flipping a console feature' do
+      console_parameter
+      feature.enable
+
+      param = client.fetch_template.first['parameters']['search']
+      expect(param['description']).to eq('owned by the mobile team')
+      expect(param['conditionalValues']).to eq('ios_beta' => { 'value' => 'true' })
+      expect(param.dig('defaultValue', 'value')).to eq('true')
+    end
+
+    it 'drops conditionalValues on a type change, and says so' do
+      console_parameter
+
+      expect { feature.enable_actor(Flipper::Actor.new('1')) }
+        .to output(/conditionalValues were dropped/).to_stderr
+
+      param = client.fetch_template.first['parameters']['search']
+      expect(param).not_to have_key('conditionalValues')
+      expect(param['description']).to eq('owned by the mobile team')
+    end
+  end
+
+  describe 'writes that change nothing' do
+    it 'does not spend a publish re-enabling an already-enabled feature' do
+      feature.enable
+      expect { 2.times { feature.enable } }.not_to change(client, :publish_calls)
+    end
+  end
+
+  describe 'gates this adapter cannot persist' do
+    it 'raises rather than silently discarding an expression gate' do
+      expect { feature.enable(Flipper.property(:plan).eq('basic')) }
+        .to raise_error(ArgumentError, /Unsupported gate :expression/)
+    end
+  end
+
+  describe 'disabling a percentage gate' do
+    # Flipper stores "0" rather than clearing the gate, and "0" means the same
+    # as absent. Treating it as present pushed the feature into the JSON blob,
+    # turning it off for every client while the backend still said enabled.
+    it 'leaves an otherwise boolean-only feature readable by clients' do
+      feature.enable
+      feature.disable_percentage_of_actors
+
+      param = client.fetch_template.first['parameters']['search']
+      expect(param['valueType']).to eq('BOOLEAN')
+      expect(param.dig('defaultValue', 'value')).to eq('true')
+      expect(feature).to be_enabled
+    end
+  end
+
   describe 'recognising which parameters are features' do
     def publish(parameters)
       template, etag = client.fetch_template

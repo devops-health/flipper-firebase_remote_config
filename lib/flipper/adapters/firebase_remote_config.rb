@@ -4,6 +4,7 @@ require 'set'
 require 'flipper'
 require 'flipper/adapters/firebase_remote_config/version'
 require 'flipper/adapters/firebase_remote_config/client'
+require 'flipper/adapters/firebase_remote_config/gate_storage'
 require 'flipper/adapters/firebase_remote_config/listener'
 
 module Flipper
@@ -36,6 +37,8 @@ module Flipper
     # See README.md for the rationale and for caveats (eventual consistency,
     # write quotas, no support for Remote Config conditions in v0.1).
     class FirebaseRemoteConfig
+      include GateStorage
+
       DEFAULT_CACHE_TTL = 30 # seconds
 
       # The gate keys we persist. Also how we recognise one of our parameters
@@ -100,11 +103,13 @@ module Flipper
       end
 
       def enable(feature, gate, thing)
+        ensure_persistable_gate!(gate)
         mutate_gates(feature) { |gates| apply_enable_gate(gates, gate, thing) }
         true
       end
 
       def disable(feature, gate, thing)
+        ensure_persistable_gate!(gate)
         mutate_gates(feature) { |gates| apply_disable_gate(gates, gate, thing) }
         true
       end
@@ -197,6 +202,18 @@ module Flipper
         end
       end
 
+      # Fail closed on a gate outside the five we persist. Flipper's :expression
+      # gate reaches the :json branch below and would otherwise pass
+      # boolean_only? — which inspects only the four non-boolean gates it knows —
+      # and be written as a plain BOOLEAN, discarding the gate silently.
+      def ensure_persistable_gate!(gate)
+        return if GATE_KEYS.include?(gate.key.to_s)
+
+        raise ArgumentError,
+              "Unsupported gate #{gate.key.inspect}. This adapter persists only " \
+              "#{GATE_KEYS.join(', ')} — see \"Adding a new gate type\" in CLAUDE.md."
+      end
+
       def default_config
         {
           boolean: nil,
@@ -250,7 +267,13 @@ module Flipper
         attempts = 0
         begin
           template, etag = checkout_template
+          before = JSON.generate(template)
           yield template
+          # Flipper's Feature#enable calls add then enable, and add changes
+          # nothing for a feature that already exists. Publishing that anyway
+          # spent a write against a quota measured in hundreds per day.
+          return if JSON.generate(template) == before
+
           @client.publish_template(template, etag)
           reload!
         rescue FirebaseRemoteConfig::ETagMismatch
@@ -272,125 +295,6 @@ module Flipper
       # adapter whose whole point is that both sides read the same parameters,
       # that is closer to right than wrong — and it means a flag created in the
       # Firebase console is a real feature here, which the index made impossible.
-      def flipper_feature?(param)
-        return true if param['valueType'] == 'BOOLEAN'
-
-        raw = param.dig('defaultValue', 'value')
-        return false if raw.nil?
-
-        parsed = begin
-          JSON.parse(raw)
-        rescue JSON::ParserError
-          nil
-        end
-        return true if [true, false].include?(parsed)
-
-        # Every blob we write starts from default_config, so it always carries
-        # all five keys. Requiring the complete set costs nothing and keeps an
-        # app's own JSON config out — `{"groups": [...]}` is an ordinary thing
-        # to find in a mobile app's parameters, and matching on any single key
-        # would claim it as a feature.
-        parsed.is_a?(Hash) && (GATE_KEYS - parsed.keys).empty?
-      end
-
-      def ensure_parameter(template, feature_key)
-        return if (template['parameters'] || {}).key?(feature_key)
-
-        write_gates(template, feature_key, default_config)
-      end
-
-      def read_gates(template, feature_key)
-        param = (template['parameters'] || {})[feature_key]
-        raw   = param&.dig('defaultValue', 'value')
-        return default_config if raw.nil?
-
-        # A BOOLEAN parameter may have been typed by hand in the console, so
-        # accept everything Firebase accepts rather than only "true"/"false".
-        return boolean_gates(raw) if param['valueType'] == 'BOOLEAN'
-
-        parse_gates(raw)
-      end
-
-      def parse_gates(raw)
-        case (parsed = JSON.parse(raw, symbolize_names: true))
-        when Hash        then deserialize_gates(parsed)
-        when true, false then boolean_gates(parsed.to_s)
-        else default_config
-        end
-      rescue JSON::ParserError
-        default_config
-      end
-
-      # `false` round-trips to boolean: nil, not "false" — #disable writes an
-      # all-nil config, and Flipper's shared adapter spec compares #get against
-      # default_config exactly.
-      def boolean_gates(raw)
-        return default_config unless TRUTHY.include?(raw.to_s.downcase)
-
-        default_config.merge(boolean: 'true')
-      end
-
-      # Simple features become real BOOLEAN parameters so a client can call
-      # getBoolean() on them. Anything using actor, group or percentage gates
-      # falls back to the JSON blob, which only the backend can interpret.
-      def write_gates(template, feature_key, gates)
-        if boolean_only?(gates)
-          # Typecast, don't test truthiness: the value is the *string* "true" or
-          # "false", and "false" is truthy in Ruby. Flipper reads this same value
-          # through Typecast.to_boolean, so anything else here means the write
-          # path and Flipper's read path disagree about what is stored.
-          write_parameter(template, feature_key,
-                          ::Flipper::Typecast.to_boolean(gates[:boolean]) ? 'true' : 'false',
-                          type: 'BOOLEAN')
-        else
-          warn_client_visibility_loss(template, feature_key)
-          write_parameter(template, feature_key,
-                          JSON.generate(serialize_gates(gates)), type: 'JSON')
-        end
-      end
-
-      def boolean_only?(gates)
-        Array(gates[:actors]).empty? &&
-          Array(gates[:groups]).empty? &&
-          gates[:percentage_of_actors].nil? &&
-          gates[:percentage_of_time].nil?
-      end
-
-      # getBoolean() on a JSON blob returns false rather than erroring, so a
-      # feature that gains an actor gate silently switches off for every client.
-      # At least make the moment it happens visible.
-      def warn_client_visibility_loss(template, feature_key)
-        param = (template['parameters'] || {})[feature_key]
-        return unless param && param['valueType'] == 'BOOLEAN'
-
-        warn "flipper-firebase_remote_config: feature #{feature_key.inspect} is no " \
-             'longer a plain boolean, so Firebase clients reading it will now see ' \
-             'false. Keep client-visible features boolean-only.'
-      end
-
-      def write_parameter(template, name, value, type: 'JSON')
-        template['parameters'] ||= {}
-        template['parameters'][name] = {
-          'valueType' => type,
-          'defaultValue' => { 'value' => value }
-        }
-      end
-
-      def serialize_gates(gates)
-        gates.each_with_object({}) do |(key, value), acc|
-          acc[key] = value.is_a?(Set) ? value.to_a : value
-        end
-      end
-
-      def deserialize_gates(raw)
-        default_config.merge(
-          boolean: raw[:boolean],
-          actors: Set.new(Array(raw[:actors])),
-          groups: Set.new(Array(raw[:groups])),
-          percentage_of_actors: raw[:percentage_of_actors],
-          percentage_of_time: raw[:percentage_of_time]
-        )
-      end
     end
   end
 end

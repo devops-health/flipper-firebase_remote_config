@@ -134,6 +134,37 @@ RSpec.describe Flipper::Adapters::FirebaseRemoteConfig::Listener do
     end
   end
 
+  describe 'recovering from a failed baseline' do
+    it 'still reports the first change after prime fails' do
+      boom = true
+      allow(adapter).to receive(:refresh!).and_wrap_original do |original, *args|
+        if boom
+          boom = false
+          raise Flipper::Adapters::FirebaseRemoteConfig::Error, 'blip'
+        end
+        original.call(*args)
+      end
+
+      # The run loop wraps prime in the same rescue, so a boot-time blip is
+      # swallowed and the thread carries on.
+      begin
+        listener.send(:prime)
+      rescue Flipper::Adapters::FirebaseRemoteConfig::Error
+        nil
+      end
+
+      listener.tick # recovery: establishes the baseline prime couldn't
+
+      publish_externally { |t| t['parameters']['beta'] = boolean_param('true') }
+
+      changed = :never_called
+      listener.on_change { |keys| changed = keys }
+      listener.tick
+
+      expect(changed).to eq(['beta'])
+    end
+  end
+
   describe 'the polling thread' do
     after { listener.stop }
 
@@ -191,7 +222,12 @@ RSpec.describe Flipper::Adapters::FirebaseRemoteConfig::Listener do
       listener.start
       expect(Thread.list.size).to eq(threads_before)
 
+      # And it must still be polling. Returning early from #start without
+      # re-arming @running left the outgoing thread to exit at its next check,
+      # so the listener reported success and then polled nothing.
       release << { 'parameters' => {} } # let the wedged tick finish
+      sleep 0.1
+      expect(listener.running?).to be(true)
     end
   end
 
