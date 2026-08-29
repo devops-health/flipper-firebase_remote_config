@@ -217,6 +217,13 @@ consequence worth knowing in both directions — **a `BOOLEAN` parameter you
 create directly in the Firebase console is a real Flipper feature**, and so is
 any boolean parameter your app already had.
 
+### Multi-tenant setups
+
+**Give each tenant its own Firebase project.** Parameter names are the feature
+keys with nothing prepended, so two tenants sharing one project would overwrite
+each other's flags with no warning. Separate projects also keep tenants from
+sharing a write quota that is only a few hundred publishes per day.
+
 ## Reading these flags from a client app
 
 This is the point of the gem: the same parameter, flipped in one place, read by
